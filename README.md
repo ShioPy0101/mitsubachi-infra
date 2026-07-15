@@ -328,6 +328,8 @@ cd mitsubachi-infra
 ./scripts/install_local.sh --interactive
 ```
 
+PostgreSQL は対話入力で role、password、host、port を一度だけ入力します。Infra はそこから Rails production 用の `DATABASE_URL`、`DATABASE_CACHE_URL`、`DATABASE_QUEUE_URL`、`DATABASE_CABLE_URL` を生成し、`/etc/mitsubachi/rails.env` へ配置します。role は `mitsubachi`、host は `127.0.0.1`、DB 名は固定の 4 DB です。生成された URL は secret として扱い、summary やログには値を表示しません。
+
 `install_local.sh` の値の優先順位:
 
 ```text
@@ -355,9 +357,11 @@ cp env/rails.env.example env/rails.env
   --rails-env-file ./env/rails.env
 ```
 
-`config/local.env` は非秘密情報だけを保存します。`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`DATABASE_URL`、`RESEND_API_KEY` は保存しません。`.gitignore` 対象です。
+`config/local.env` は非秘密情報だけを保存します。`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、4 つの `DATABASE*_URL`、`RESEND_API_KEY` は保存しません。`.gitignore` 対象です。
 
 `--rails-env-file ./env/rails.env` は入力元です。正式な配置先は systemd が読む `/etc/mitsubachi/rails.env` で、install 時に `root:deploy 0640` で配置します。
+
+既存 `/etc/mitsubachi/rails.env` が単一 `DATABASE_URL` だけの旧構成の場合、Rails production の複数 DB 契約を満たさないため停止します。`--update-secrets` または `--overwrite-rails-env` を明示し、4 つの `DATABASE*_URL` へ更新してください。
 
 ### 非対話実行
 
@@ -436,7 +440,7 @@ sudo ./scripts/bootstrap_ubuntu.sh \
 
 Ruby version は `--ruby-version` で明示できます。未指定かつ `--app-repo` を指定した場合、Rails API の `.ruby-version` を優先します。Bundler version は `Gemfile.lock` の `BUNDLED WITH` を優先します。
 
-PostgreSQL role/database は、無断で削除・再作成しません。明示作成する場合:
+PostgreSQL role/database は、無断で削除・再作成しません。Rails production は primary / cache / queue / cable の 4 DB を使います。role は 4 DB すべてで `mitsubachi` に統一し、host は Unix socket ではなく `127.0.0.1` を明示します。`/etc/mitsubachi/rails.env` に 4 つの URL が配置済みの場合、明示作成は冪等に実行できます。
 
 ```bash
 sudo ./scripts/bootstrap_ubuntu.sh \
@@ -444,12 +448,16 @@ sudo ./scripts/bootstrap_ubuntu.sh \
   --create-db-role mitsubachi
 ```
 
-password や権限付与は運用方針に合わせて PostgreSQL 側で設定してください。SQL 例:
+作成対象:
 
-```sql
-CREATE ROLE mitsubachi LOGIN PASSWORD '<strong-password>';
-CREATE DATABASE mitsubachi_production OWNER mitsubachi;
+```text
+mitsubachi_production
+mitsubachi_production_cache
+mitsubachi_production_queue
+mitsubachi_production_cable
 ```
+
+初回作成時だけ `DATABASE_URL` の password で role を作成します。既存 role の password は無条件変更しません。既存 DB の owner が `mitsubachi` 以外なら停止します。
 
 ## LAN 設定
 
@@ -507,8 +515,12 @@ SESSION_COOKIE_SECURE
   LAN HTTP 検証では false を指定する。ただし Rails 側がこの環境変数を
   実際に参照しているとは限らない。
 
-DATABASE_URL
-  PostgreSQL 接続 URL。password に特殊文字がある場合は URL encode が必要。
+DATABASE_URL / DATABASE_CACHE_URL / DATABASE_QUEUE_URL / DATABASE_CABLE_URL
+  Rails production 複数 DB 用の PostgreSQL 接続 URL。4 つすべて必須。
+  DB 名は順に mitsubachi_production、mitsubachi_production_cache、
+  mitsubachi_production_queue、mitsubachi_production_cable。
+  role は mitsubachi、host は 127.0.0.1、port は 5432 に統一する。
+  password に特殊文字がある場合は URL encode が必要。
 
 RAILS_MASTER_KEY / SECRET_KEY_BASE
   Rails production secret。実値を commit しない。
@@ -517,7 +529,7 @@ RESEND_API_KEY / MAIL_FROM
   mail 送信用。未使用なら空でも Rails 側設定に従う。
 ```
 
-`/etc/mitsubachi/rails.env` の推奨 owner/group/mode は `root:deploy 0640` です。`DATABASE_URL`、`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`RESEND_API_KEY` は標準出力やログへ表示しません。
+`/etc/mitsubachi/rails.env` の推奨 owner/group/mode は `root:deploy 0640` です。4 つの `DATABASE*_URL`、`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`RESEND_API_KEY` は標準出力やログへ表示しません。単一 `DATABASE_URL` だけの旧構成は Rails production 起動前に停止します。
 
 この Infra は Rails code を変更しません。`SESSION_COOKIE_SECURE=false` を Rails が参照していない場合、または production で `secure: true` が固定されている場合、LAN HTTP では Cookie session が送信されず認証できません。これは `mitsubachi-ruby` 側の確認・修正事項です。公開 HTTPS へ移行する時は Secure Cookie を必須へ戻してください。
 

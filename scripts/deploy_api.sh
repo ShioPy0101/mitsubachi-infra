@@ -64,6 +64,16 @@ require_filesystem_rw "${DRIVE_ITEMS_ROOT}"
 [[ -f "${RAILS_ENV_FILE}" ]] || die "missing env file: ${RAILS_ENV_FILE}"
 load_systemd_env_file "${RAILS_ENV_FILE}"
 [[ "${FILE_STORAGE_ROOT:-}" == "/mnt/external-hdd/mitsubachi/files" ]] || die "FILE_STORAGE_ROOT must be /mnt/external-hdd/mitsubachi/files"
+missing_database_urls=()
+for database_url_key in DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL; do
+  if [[ -z "${!database_url_key:-}" ]]; then
+    missing_database_urls+=("${database_url_key}")
+  fi
+done
+if ((${#missing_database_urls[@]} > 0)); then
+  die "Rails production の複数DB設定が不足しています: ${missing_database_urls[*]}。単一 DATABASE_URL だけの旧構成では deploy できません。"
+fi
+log "Rails production 用の4つの DATABASE URL が設定済みであることを確認しました。値は表示しません。"
 ensure_dir "deploy:deploy" 0755 "${APP_ROOT}" "${REPO_CACHE}" "${RELEASE_ROOT}" "${SHARED_ROOT}" "${SHARED_ROOT}/log" "${SHARED_ROOT}/tmp"
 touch "${DEPLOY_LOG}"
 

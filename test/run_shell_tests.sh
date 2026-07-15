@@ -111,6 +111,8 @@ grep -F 'CREATE ROLE "%s" LOGIN PASSWORD %s;' "${ROOT}/scripts/bootstrap_ubuntu.
 grep -F 'PostgreSQL role は既に存在するため password は変更しません' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap keeps existing PostgreSQL role password"
 # shellcheck disable=SC2016
 grep -F 'PGPASSWORD="${POSTGRES_URL_PASSWORD}" psql' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap verifies PostgreSQL password authentication"
+grep -F 'local db_names=(mitsubachi_production mitsubachi_production_cache mitsubachi_production_queue mitsubachi_production_cable)' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap creates all four production databases"
+grep -F 'local env_keys=(DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL)' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap validates all four database URLs"
 ensure_line="$(rg -n '^ensure_deploy_account$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 env_line="$(rg -n '^install_rails_env_file$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 bootstrap_line="$(rg -n 'sudo_cmd "\$\{SCRIPT_DIR\}/bootstrap_ubuntu.sh"' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
@@ -121,6 +123,12 @@ deploy_line="$(rg -n 'run_as_deploy "\$\{deploy_user\}" "\$\{deploy_home\}" "\$\
 (( bootstrap_line < deploy_line )) || fail "install proceeds to deploy_api after bootstrap"
 # shellcheck disable=SC2016
 grep -F 'bootstrap_args+=(--create-db-role "${postgres_role}" --create-db "${postgres_database}")' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install passes PostgreSQL role/database to bootstrap"
+grep -F 'database_url_keys=(DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL)' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install knows all database URL keys"
+grep -F 'generate_database_urls' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install generates database URLs from one credential prompt"
+grep -F '単一 DATABASE_URL だけの旧構成を検出しました' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install detects legacy single database URL"
+grep -F 'DATABASE_CACHE_URL' "${ROOT}/scripts/deploy_api.sh" >/dev/null || fail "deploy checks cache database URL"
+grep -F 'DATABASE_QUEUE_URL' "${ROOT}/scripts/deploy_api.sh" >/dev/null || fail "deploy checks queue database URL"
+grep -F 'DATABASE_CABLE_URL' "${ROOT}/scripts/deploy_api.sh" >/dev/null || fail "deploy checks cable database URL"
 pass "install sudo/user boundary static checks"
 
 tmpdir="$(mktemp -d)"
@@ -170,6 +178,9 @@ chmod 0600 "${install_config_without_network}"
   printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
   printf '%s=%s\n' SECRET_KEY_BASE test-secret-key-base-placeholder
   printf '%s=%s\n' DATABASE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production
+  printf '%s=%s\n' DATABASE_CACHE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_cache
+  printf '%s=%s\n' DATABASE_QUEUE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_queue
+  printf '%s=%s\n' DATABASE_CABLE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_cable
   printf '%s=%s\n' FILE_STORAGE_ROOT /mnt/external-hdd/mitsubachi/files
   printf '%s=%s\n' MAX_UPLOAD_SIZE_BYTES 10737418240
   printf '%s=%s\n' APP_HOST 192.168.1.50
@@ -182,6 +193,9 @@ chmod 0600 "${install_rails_env}"
   printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
   printf '%s=%s\n' SECRET_KEY_BASE test-secret-key-base-placeholder
   printf '%s=%s\n' DATABASE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production
+  printf '%s=%s\n' DATABASE_CACHE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_cache
+  printf '%s=%s\n' DATABASE_QUEUE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_queue
+  printf '%s=%s\n' DATABASE_CABLE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_cable
   printf '%s=%s\n' FILE_STORAGE_ROOT /mnt/external-hdd/mitsubachi/files
   printf '%s=%s\n' MAX_UPLOAD_SIZE_BYTES 10737418240
   printf '%s=%s\n' SESSION_COOKIE_SECURE false
@@ -191,6 +205,9 @@ chmod 0600 "${install_rails_env_min}"
   printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
   printf '%s=%s\n' SECRET_KEY_BASE test-secret-key-base-placeholder
   printf '%s=%s\n' DATABASE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production
+  printf '%s=%s\n' DATABASE_CACHE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_cache
+  printf '%s=%s\n' DATABASE_QUEUE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_queue
+  printf '%s=%s\n' DATABASE_CABLE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production_cable
   printf '%s=%s\n' FILE_STORAGE_ROOT /mnt/external-hdd/mitsubachi/files
   printf '%s=%s\n' MAX_UPLOAD_SIZE_BYTES 10737418240
   printf '%s=%s\n' APP_HOST 192.168.1.60
@@ -215,6 +232,25 @@ if rg -n 'test-master-key-placeholder|test-secret-key-base-placeholder|test-pass
   fail "install dry-run leaked secret"
 fi
 pass "install dry-run redacts secrets"
+
+legacy_rails_env="${tmpdir}/rails-legacy-single-db.env"
+{
+  printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
+  printf '%s=%s\n' SECRET_KEY_BASE test-secret-key-base-placeholder
+  printf '%s=%s\n' DATABASE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production
+  printf '%s=%s\n' FILE_STORAGE_ROOT /mnt/external-hdd/mitsubachi/files
+  printf '%s=%s\n' MAX_UPLOAD_SIZE_BYTES 10737418240
+  printf '%s=%s\n' SESSION_COOKIE_SECURE false
+} > "${legacy_rails_env}"
+chmod 0600 "${legacy_rails_env}"
+run_expect_failure "install rejects legacy single database URL" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config}" \
+  --rails-env-file "${legacy_rails_env}" \
+  --non-interactive \
+  --yes \
+  --dry-run
+grep -F '単一 DATABASE_URL だけの旧構成を検出しました' /tmp/mitsubachi-test.err >/dev/null || fail "legacy single database URL error is clear"
+pass "install legacy single database URL detection"
 
 run_expect_failure "install rejects unsupported non-default deploy account" bash "${ROOT}/scripts/install_local.sh" \
   --config "${install_config_empty}" \
@@ -322,7 +358,7 @@ if rg -n 'super-secret' /tmp/mitsubachi-test.err >/dev/null 2>&1; then
 fi
 pass "ERR trap diagnostics redact secrets"
 
-if rg -n 'RAILS_MASTER_KEY|SECRET_KEY_BASE|DATABASE_URL|RESEND_API_KEY' "${install_config}" >/dev/null 2>&1; then
+if rg -n 'RAILS_MASTER_KEY|SECRET_KEY_BASE|DATABASE_URL|DATABASE_CACHE_URL|DATABASE_QUEUE_URL|DATABASE_CABLE_URL|RESEND_API_KEY' "${install_config}" >/dev/null 2>&1; then
   fail "config/local.env contains secret keys"
 fi
 pass "non-secret config excludes secrets"
@@ -349,7 +385,11 @@ pass "CIDR validation"
 
 grep -F 'WorkingDirectory=/var/www/mitsubachi/current' "${ROOT}/systemd/mitsubachi-api.service" >/dev/null || fail "systemd WorkingDirectory"
 grep -F 'RequiresMountsFor=/mnt/external-hdd/mitsubachi/files' "${ROOT}/systemd/mitsubachi-api.service" >/dev/null || fail "systemd RequiresMountsFor"
+grep -F 'EnvironmentFile=/etc/mitsubachi/rails.env' "${ROOT}/systemd/mitsubachi-api.service" >/dev/null || fail "systemd reads rails env file with database URLs"
 grep -F 'FILE_STORAGE_ROOT=/mnt/external-hdd/mitsubachi/files' "${ROOT}/env/rails.env.example" >/dev/null || fail "env FILE_STORAGE_ROOT"
+grep -F 'DATABASE_CACHE_URL=' "${ROOT}/env/rails.env.example" >/dev/null || fail "env DATABASE_CACHE_URL"
+grep -F 'DATABASE_QUEUE_URL=' "${ROOT}/env/rails.env.example" >/dev/null || fail "env DATABASE_QUEUE_URL"
+grep -F 'DATABASE_CABLE_URL=' "${ROOT}/env/rails.env.example" >/dev/null || fail "env DATABASE_CABLE_URL"
 grep -F 'BULK_DOWNLOAD_TMP=/mnt/external-hdd/mitsubachi/tmp/bulk_downloads' "${ROOT}/env/rails.env.example" >/dev/null || fail "env BULK_DOWNLOAD_TMP"
 grep -F 'config/local.env' "${ROOT}/.gitignore" >/dev/null || fail "gitignore local config"
 grep -F 'env/rails.env' "${ROOT}/.gitignore" >/dev/null || fail "gitignore local rails env"

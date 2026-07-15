@@ -26,7 +26,7 @@ STORAGE_BACKUP_DIR="${STORAGE_BACKUP_DIR:-${MITSUBACHI_HDD_ROOT}/backups/storage
 SERVICE_NAME="${SERVICE_NAME:-mitsubachi-api}"
 LOCK_DIR="${LOCK_DIR:-/tmp/mitsubachi-infra-locks}"
 CURRENT_STAGE="${CURRENT_STAGE:-init}"
-SECRET_KEYS_REGEX='^(DATABASE_URL|RAILS_MASTER_KEY|SECRET_KEY_BASE|RESEND_API_KEY)='
+SECRET_KEYS_REGEX='^(DATABASE_URL|DATABASE_CACHE_URL|DATABASE_QUEUE_URL|DATABASE_CABLE_URL|RAILS_MASTER_KEY|SECRET_KEY_BASE|RESEND_API_KEY)='
 ERROR_TRAP_ACTIVE=false
 
 log() {
@@ -175,6 +175,9 @@ redact_log_text() {
   local text="$1"
   text="$(sed -E \
     -e 's#(DATABASE_URL=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(DATABASE_CACHE_URL=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(DATABASE_QUEUE_URL=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(DATABASE_CABLE_URL=)[^[:space:]]+#\1<redacted>#g' \
     -e 's#(RAILS_MASTER_KEY=)[^[:space:]]+#\1<redacted>#g' \
     -e 's#(SECRET_KEY_BASE=)[^[:space:]]+#\1<redacted>#g' \
     -e 's#(RESEND_API_KEY=)[^[:space:]]+#\1<redacted>#g' \

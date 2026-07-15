@@ -111,9 +111,11 @@ sql_literal() {
 }
 
 parse_database_url_for_postgres_bootstrap() {
+  local env_key="$1"
+  local expected_db="$2"
   local url authority_path authority userinfo hostport encoded_role encoded_password encoded_db
-  url="${DATABASE_URL:-}"
-  [[ -n "${url}" ]] || die "CREATE_DB 指定時は ${RAILS_ENV_FILE} の DATABASE_URL が必要です。"
+  url="${!env_key:-}"
+  [[ -n "${url}" ]] || die "CREATE_DB 指定時は ${RAILS_ENV_FILE} の ${env_key} が必要です。"
   case "${url}" in
     postgres://*|postgresql://*) ;;
     *) die "DATABASE_URL は postgres:// または postgresql:// 形式である必要があります。" ;;
@@ -129,19 +131,32 @@ parse_database_url_for_postgres_bootstrap() {
   [[ "${userinfo}" == *":"* ]] || die "DATABASE_URL に PostgreSQL password が含まれていません。"
   encoded_role="${userinfo%%:*}"
   encoded_password="${userinfo#*:}"
-  POSTGRES_URL_ROLE="$(url_decode_component "${encoded_role}")"
-  POSTGRES_URL_PASSWORD="$(url_decode_component "${encoded_password}")"
-  POSTGRES_URL_DATABASE="$(url_decode_component "${encoded_db}")"
-  POSTGRES_URL_HOST="${hostport%%:*}"
+  local parsed_role parsed_password parsed_database parsed_host parsed_port
+  parsed_role="$(url_decode_component "${encoded_role}")"
+  parsed_password="$(url_decode_component "${encoded_password}")"
+  parsed_database="$(url_decode_component "${encoded_db}")"
+  parsed_host="${hostport%%:*}"
   if [[ "${hostport}" == *":"* ]]; then
-    POSTGRES_URL_PORT="${hostport##*:}"
+    parsed_port="${hostport##*:}"
   else
-    POSTGRES_URL_PORT="5432"
+    parsed_port="5432"
   fi
-  [[ "${POSTGRES_URL_ROLE}" == "${CREATE_DB_ROLE}" ]] || die "DATABASE_URL の role と --create-db-role が一致しません。"
-  [[ "${POSTGRES_URL_DATABASE}" == "${CREATE_DB}" ]] || die "DATABASE_URL の database と --create-db が一致しません。"
-  [[ -n "${POSTGRES_URL_PASSWORD}" ]] || die "DATABASE_URL の PostgreSQL password が空です。"
-  [[ "${POSTGRES_URL_PORT}" =~ ^[0-9]+$ ]] || die "DATABASE_URL の PostgreSQL port が不正です。"
+  [[ "${parsed_role}" == "${CREATE_DB_ROLE}" ]] || die "${env_key} の role と --create-db-role が一致しません。"
+  [[ "${parsed_database}" == "${expected_db}" ]] || die "${env_key} の database は ${expected_db} である必要があります。"
+  [[ "${parsed_host}" == "127.0.0.1" ]] || die "${env_key} の host は 127.0.0.1 に固定してください。"
+  [[ -n "${parsed_password}" ]] || die "${env_key} の PostgreSQL password が空です。"
+  [[ "${parsed_port}" =~ ^[0-9]+$ ]] || die "${env_key} の PostgreSQL port が不正です。"
+  if [[ -z "${POSTGRES_URL_ROLE:-}" ]]; then
+    POSTGRES_URL_ROLE="${parsed_role}"
+    POSTGRES_URL_PASSWORD="${parsed_password}"
+    POSTGRES_URL_HOST="${parsed_host}"
+    POSTGRES_URL_PORT="${parsed_port}"
+  else
+    [[ "${POSTGRES_URL_ROLE}" == "${parsed_role}" ]] || die "4つの DATABASE URL の role が一致しません。"
+    [[ "${POSTGRES_URL_PASSWORD}" == "${parsed_password}" ]] || die "4つの DATABASE URL の password が一致しません。"
+    [[ "${POSTGRES_URL_HOST}" == "${parsed_host}" ]] || die "4つの DATABASE URL の host が一致しません。"
+    [[ "${POSTGRES_URL_PORT}" == "${parsed_port}" ]] || die "4つの DATABASE URL の port が一致しません。"
+  fi
 }
 
 psql_scalar_as_postgres() {
@@ -154,7 +169,18 @@ ensure_postgres_role_database() {
   [[ "${CREATE_DB}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "unsafe database name"
   [[ "${CREATE_DB_ROLE}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "unsafe database role"
   load_systemd_env_file "${RAILS_ENV_FILE}"
-  parse_database_url_for_postgres_bootstrap
+  local db_names=(mitsubachi_production mitsubachi_production_cache mitsubachi_production_queue mitsubachi_production_cable)
+  local env_keys=(DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL)
+  local i db_name
+  [[ "${CREATE_DB}" == "mitsubachi_production" ]] || die "--create-db は mitsubachi_production に固定してください。"
+  [[ "${CREATE_DB_ROLE}" == "mitsubachi" ]] || die "--create-db-role は mitsubachi に固定してください。"
+  POSTGRES_URL_ROLE=""
+  POSTGRES_URL_PASSWORD=""
+  POSTGRES_URL_HOST=""
+  POSTGRES_URL_PORT=""
+  for i in "${!env_keys[@]}"; do
+    parse_database_url_for_postgres_bootstrap "${env_keys[$i]}" "${db_names[$i]}"
+  done
 
   local role_exists db_owner password_sql
   role_exists="$(psql_scalar_as_postgres "SELECT 1 FROM pg_roles WHERE rolname = $(sql_literal "${CREATE_DB_ROLE}")")"
@@ -167,28 +193,32 @@ ensure_postgres_role_database() {
     log "PostgreSQL role を作成しました: ${CREATE_DB_ROLE}"
   fi
 
-  db_owner="$(psql_scalar_as_postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = $(sql_literal "${CREATE_DB}")")"
-  if [[ -z "${db_owner}" ]]; then
-    printf 'CREATE DATABASE "%s" OWNER "%s";\n' "${CREATE_DB}" "${CREATE_DB_ROLE}" |
-      sudo -u postgres psql -v ON_ERROR_STOP=1
-    log "PostgreSQL database を作成しました: ${CREATE_DB}"
-  elif [[ "${db_owner}" == "${CREATE_DB_ROLE}" ]]; then
-    log "PostgreSQL database は既に存在し、owner も一致しています: ${CREATE_DB}"
-  else
-    die "PostgreSQL database owner が一致しません。database=${CREATE_DB} owner=${db_owner} expected=${CREATE_DB_ROLE}"
-  fi
+  for db_name in "${db_names[@]}"; do
+    db_owner="$(psql_scalar_as_postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = $(sql_literal "${db_name}")")"
+    if [[ -z "${db_owner}" ]]; then
+      printf 'CREATE DATABASE "%s" OWNER "%s";\n' "${db_name}" "${CREATE_DB_ROLE}" |
+        sudo -u postgres psql -v ON_ERROR_STOP=1
+      log "PostgreSQL database を作成しました: ${db_name}"
+    elif [[ "${db_owner}" == "${CREATE_DB_ROLE}" ]]; then
+      log "PostgreSQL database は既に存在し、owner も一致しています: ${db_name}"
+    else
+      die "PostgreSQL database owner が一致しません。database=${db_name} owner=${db_owner} expected=${CREATE_DB_ROLE}"
+    fi
+  done
 
-  if PGPASSWORD="${POSTGRES_URL_PASSWORD}" psql \
-    -h "${POSTGRES_URL_HOST}" \
-    -p "${POSTGRES_URL_PORT}" \
-    -U "${CREATE_DB_ROLE}" \
-    -d "${CREATE_DB}" \
-    -v ON_ERROR_STOP=1 \
-    -Atqc 'SELECT 1' >/dev/null; then
-    log "PostgreSQL role/database/password の接続確認に成功しました: role=${CREATE_DB_ROLE} database=${CREATE_DB}"
-  else
-    die "PostgreSQL 接続確認に失敗しました。既存 role の password 不一致、pg_hba.conf、host/port、database owner を確認してください。"
-  fi
+  for db_name in "${db_names[@]}"; do
+    if PGPASSWORD="${POSTGRES_URL_PASSWORD}" psql \
+      -h "${POSTGRES_URL_HOST}" \
+      -p "${POSTGRES_URL_PORT}" \
+      -U "${CREATE_DB_ROLE}" \
+      -d "${db_name}" \
+      -v ON_ERROR_STOP=1 \
+      -Atqc 'SELECT 1' >/dev/null; then
+      log "PostgreSQL role/database/password の接続確認に成功しました: role=${CREATE_DB_ROLE} database=${db_name}"
+    else
+      die "PostgreSQL 接続確認に失敗しました。既存 role の password 不一致、pg_hba.conf、host/port、database owner を確認してください。database=${db_name}"
+    fi
+  done
 }
 
 nginx_backup_path() {

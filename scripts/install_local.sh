@@ -35,6 +35,9 @@ Options:
   --rails-master-key VALUE       Secret. Prefer interactive input or --rails-env-file over CLI.
   --secret-key-base VALUE        Secret. Prefer interactive input or --rails-env-file over CLI.
   --database-url VALUE           Secret. Prefer interactive input or --rails-env-file over CLI.
+  --database-cache-url VALUE     Secret. Prefer interactive input or --rails-env-file over CLI.
+  --database-queue-url VALUE     Secret. Prefer interactive input or --rails-env-file over CLI.
+  --database-cable-url VALUE     Secret. Prefer interactive input or --rails-env-file over CLI.
   --resend-api-key VALUE         Secret. Prefer interactive input or --rails-env-file over CLI.
   --mail-from VALUE              Mail From address.
   --app-host VALUE               Rails APP_HOST. Default: SERVER_IP.
@@ -51,6 +54,9 @@ declare -A secret_key
 secret_key[RAILS_MASTER_KEY]=true
 secret_key[SECRET_KEY_BASE]=true
 secret_key[DATABASE_URL]=true
+secret_key[DATABASE_CACHE_URL]=true
+secret_key[DATABASE_QUEUE_URL]=true
+secret_key[DATABASE_CABLE_URL]=true
 secret_key[RESEND_API_KEY]=true
 
 CONFIG_FILE=""
@@ -160,6 +166,9 @@ while (($#)); do
     --rails-master-key) set_cli_value RAILS_MASTER_KEY "${2:-}"; shift 2 ;;
     --secret-key-base) set_cli_value SECRET_KEY_BASE "${2:-}"; shift 2 ;;
     --database-url) set_cli_value DATABASE_URL "${2:-}"; shift 2 ;;
+    --database-cache-url) set_cli_value DATABASE_CACHE_URL "${2:-}"; shift 2 ;;
+    --database-queue-url) set_cli_value DATABASE_QUEUE_URL "${2:-}"; shift 2 ;;
+    --database-cable-url) set_cli_value DATABASE_CABLE_URL "${2:-}"; shift 2 ;;
     --resend-api-key) set_cli_value RESEND_API_KEY "${2:-}"; shift 2 ;;
     --mail-from) set_cli_value MAIL_FROM "${2:-}"; shift 2 ;;
     --app-host) set_cli_value APP_HOST "${2:-}"; shift 2 ;;
@@ -410,23 +419,50 @@ url_encode() {
   printf '%s\n' "${encoded}"
 }
 
-prompt_database_url() {
-  local host port role db password encoded_user encoded_password encoded_db
-  prompt_with_default POSTGRES_HOST "PostgreSQL host" "127.0.0.1"
-  prompt_with_default POSTGRES_PORT "PostgreSQL port" "5432"
-  prompt_with_default POSTGRES_ROLE "PostgreSQL role" "${values[POSTGRES_ROLE]:-mitsubachi}"
-  prompt_with_default POSTGRES_DATABASE "PostgreSQL database" "${values[POSTGRES_DATABASE]:-mitsubachi_production}"
-  prompt_secret POSTGRES_PASSWORD "PostgreSQL password" true
-  host="$(require_value POSTGRES_HOST "PostgreSQL host が不足しています。")"
-  port="$(require_value POSTGRES_PORT "PostgreSQL port が不足しています。")"
-  role="$(require_value POSTGRES_ROLE "PostgreSQL role が不足しています。")"
-  db="$(require_value POSTGRES_DATABASE "PostgreSQL database が不足しています。")"
-  password="$(require_value POSTGRES_PASSWORD "PostgreSQL password が不足しています。")"
+database_name_for_key() {
+  local key="$1"
+  case "${key}" in
+    DATABASE_URL) printf 'mitsubachi_production\n' ;;
+    DATABASE_CACHE_URL) printf 'mitsubachi_production_cache\n' ;;
+    DATABASE_QUEUE_URL) printf 'mitsubachi_production_queue\n' ;;
+    DATABASE_CABLE_URL) printf 'mitsubachi_production_cable\n' ;;
+    *) die "内部エラー: unknown database url key ${key}" ;;
+  esac
+}
+
+compose_database_url_value() {
+  local host="$1"
+  local port="$2"
+  local role="$3"
+  local password="$4"
+  local db="$5"
+  local encoded_user encoded_password encoded_db
   encoded_user="$(url_encode "${role}")"
   encoded_password="$(url_encode "${password}")"
   encoded_db="$(url_encode "${db}")"
-  values[DATABASE_URL]="postgresql://${encoded_user}:${encoded_password}@${host}:${port}/${encoded_db}"
-  sources[DATABASE_URL]="interactive secret input"
+  printf 'postgresql://%s:%s@%s:%s/%s\n' "${encoded_user}" "${encoded_password}" "${host}" "${port}" "${encoded_db}"
+}
+
+generate_database_urls() {
+  local host port role password key db
+  host="$(require_value POSTGRES_HOST "PostgreSQL host が不足しています。")"
+  port="$(require_value POSTGRES_PORT "PostgreSQL port が不足しています。")"
+  role="$(require_value POSTGRES_ROLE "PostgreSQL role が不足しています。")"
+  password="$(require_value POSTGRES_PASSWORD "PostgreSQL password が不足しています。")"
+  [[ "${host}" == "127.0.0.1" ]] || die "PostgreSQL host は Unix socket を避けるため 127.0.0.1 に固定してください。"
+  for key in DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL; do
+    db="$(database_name_for_key "${key}")"
+    values["${key}"]="$(compose_database_url_value "${host}" "${port}" "${role}" "${password}" "${db}")"
+    sources["${key}"]="generated from PostgreSQL credentials"
+  done
+}
+
+prompt_database_urls() {
+  prompt_with_default POSTGRES_HOST "PostgreSQL host" "127.0.0.1"
+  prompt_with_default POSTGRES_PORT "PostgreSQL port" "5432"
+  prompt_with_default POSTGRES_ROLE "PostgreSQL role" "${values[POSTGRES_ROLE]:-mitsubachi}"
+  prompt_secret POSTGRES_PASSWORD "PostgreSQL password" true
+  generate_database_urls
   unset 'values[POSTGRES_PASSWORD]'
 }
 
@@ -437,6 +473,8 @@ resolve_key RAILS_REF "main"
 resolve_key DEPLOY_USER "deploy"
 resolve_key DEPLOY_GROUP "deploy"
 resolve_key POSTGRES_ROLE "mitsubachi"
+resolve_key POSTGRES_HOST "127.0.0.1"
+resolve_key POSTGRES_PORT "5432"
 resolve_key POSTGRES_DATABASE "mitsubachi_production"
 resolve_key KEEP_RELEASES "5"
 resolve_key ENABLE_UFW "true"
@@ -446,6 +484,9 @@ resolve_key REMOVE_NGINX_DEFAULT_SITE "false"
 resolve_key RAILS_MASTER_KEY ""
 resolve_key SECRET_KEY_BASE ""
 resolve_key DATABASE_URL ""
+resolve_key DATABASE_CACHE_URL ""
+resolve_key DATABASE_QUEUE_URL ""
+resolve_key DATABASE_CABLE_URL ""
 resolve_key APP_HOST ""
 resolve_key FRONTEND_ORIGIN ""
 resolve_key FRONTEND_URL ""
@@ -464,6 +505,13 @@ set_default RAILS_MAX_THREADS "5"
 set_default WEB_CONCURRENCY "1"
 set_default PORT "3001"
 
+database_url_keys=(DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL)
+if [[ -v "existing_env[DATABASE_URL]" ]] &&
+   [[ ! -v "existing_env[DATABASE_CACHE_URL]" || ! -v "existing_env[DATABASE_QUEUE_URL]" || ! -v "existing_env[DATABASE_CABLE_URL]" ]] &&
+   [[ "${UPDATE_SECRETS}" != true && "${OVERWRITE_RAILS_ENV}" != true ]]; then
+  die "Rails production は DATABASE_URL / DATABASE_CACHE_URL / DATABASE_QUEUE_URL / DATABASE_CABLE_URL の4つが必須です。単一 DATABASE_URL だけの旧構成を検出しました。--update-secrets または --overwrite-rails-env を明示して4 URLへ更新してください。"
+fi
+
 if [[ "${interactive_enabled}" == true ]]; then
   [[ "${sources[SERVER_IP]:-}" != "default" ]] || prompt_with_default SERVER_IP "Ubuntu server IP" "${values[SERVER_IP]:-192.168.1.50}"
   [[ "${sources[LAN_CIDR]:-}" != "default" ]] || prompt_with_default LAN_CIDR "LAN CIDR" "${values[LAN_CIDR]:-192.168.1.0/24}"
@@ -477,7 +525,9 @@ if [[ "${interactive_enabled}" == true ]]; then
   if [[ -z "${values[SECRET_KEY_BASE]:-}" ]]; then
     prompt_secret_key_base_mode
   fi
-  [[ -n "${values[DATABASE_URL]:-}" ]] || prompt_database_url
+  if [[ -z "${values[DATABASE_URL]:-}" || -z "${values[DATABASE_CACHE_URL]:-}" || -z "${values[DATABASE_QUEUE_URL]:-}" || -z "${values[DATABASE_CABLE_URL]:-}" ]]; then
+    prompt_database_urls
+  fi
   [[ "${sources[SESSION_COOKIE_SECURE]:-}" != "default" ]] || prompt_bool SESSION_COOKIE_SECURE "Use insecure HTTP session cookie for LAN testing? (false means LAN HTTP)" "${values[SESSION_COOKIE_SECURE]:-false}"
 fi
 
@@ -503,7 +553,15 @@ set_derived_default APP_HOST "${server_ip_for_derived}"
 set_derived_default FRONTEND_ORIGIN "http://${server_ip_for_derived}"
 set_derived_default FRONTEND_URL "http://${server_ip_for_derived}"
 
-required_keys=(SERVER_IP LAN_CIDR RAILS_REPO_URL RAILS_REF DEPLOY_USER DEPLOY_GROUP POSTGRES_ROLE POSTGRES_DATABASE KEEP_RELEASES ENABLE_UFW ALLOW_SSH REMOVE_NGINX_DEFAULT_SITE RAILS_MASTER_KEY DATABASE_URL APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE)
+missing_database_url_keys=()
+for key in "${database_url_keys[@]}"; do
+  [[ -n "${values[${key}]:-}" ]] || missing_database_url_keys+=("${key}")
+done
+if [[ -n "${values[DATABASE_URL]:-}" && ( ${#missing_database_url_keys[@]} -gt 0 ) ]]; then
+  die "Rails production は DATABASE_URL / DATABASE_CACHE_URL / DATABASE_QUEUE_URL / DATABASE_CABLE_URL の4つが必須です。単一 DATABASE_URL だけの旧構成を検出しました。--interactive で再生成するか、--update-secrets と4 URLを指定してください。"
+fi
+
+required_keys=(SERVER_IP LAN_CIDR RAILS_REPO_URL RAILS_REF DEPLOY_USER DEPLOY_GROUP POSTGRES_ROLE POSTGRES_HOST POSTGRES_PORT POSTGRES_DATABASE KEEP_RELEASES ENABLE_UFW ALLOW_SSH REMOVE_NGINX_DEFAULT_SITE RAILS_MASTER_KEY DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE)
 for key in "${required_keys[@]}"; do
   if [[ -z "${values[${key}]:-}" ]]; then
     die "${key} が不足しています。--interactive で入力するか、--config / --rails-env-file / 明示引数で指定してください。"
@@ -520,6 +578,8 @@ rails_ref="$(require_value RAILS_REF "RAILS_REF が不足しています。")"
 deploy_user="$(require_value DEPLOY_USER "DEPLOY_USER が不足しています。")"
 deploy_group="$(require_value DEPLOY_GROUP "DEPLOY_GROUP が不足しています。")"
 postgres_role="$(require_value POSTGRES_ROLE "POSTGRES_ROLE が不足しています。")"
+postgres_host="$(require_value POSTGRES_HOST "POSTGRES_HOST が不足しています。")"
+postgres_port="$(require_value POSTGRES_PORT "POSTGRES_PORT が不足しています。")"
 postgres_database="$(require_value POSTGRES_DATABASE "POSTGRES_DATABASE が不足しています。")"
 keep_releases="$(require_value KEEP_RELEASES "KEEP_RELEASES が不足しています。")"
 file_storage_root="$(require_value FILE_STORAGE_ROOT "FILE_STORAGE_ROOT が不足しています。")"
@@ -530,6 +590,10 @@ allow_ssh="$(require_value ALLOW_SSH "ALLOW_SSH が不足しています。")"
 
 [[ "${deploy_user}" == "deploy" ]] || die "現在の systemd/bootstrap 設計では DEPLOY_USER=deploy のみ対応しています。指定値=${deploy_user}"
 [[ "${deploy_group}" == "deploy" ]] || die "現在の systemd/bootstrap 設計では DEPLOY_GROUP=deploy のみ対応しています。指定値=${deploy_group}"
+[[ "${postgres_role}" == "mitsubachi" ]] || die "PostgreSQL role は mitsubachi に統一してください。指定値=${postgres_role}"
+[[ "${postgres_host}" == "127.0.0.1" ]] || die "PostgreSQL host は 127.0.0.1 に固定してください。"
+[[ "${postgres_port}" == "5432" ]] || die "PostgreSQL port は 5432 に固定してください。"
+[[ "${postgres_database}" == "mitsubachi_production" ]] || die "primary database は mitsubachi_production に固定してください。"
 private_ipv4 "${server_ip}" || die "SERVER_IP は private IPv4 である必要があります。"
 cidr_contains_ipv4 "${lan_cidr}" "${server_ip}" || die "SERVER_IP は LAN_CIDR 内である必要があります。"
 [[ "${lan_cidr}" != "0.0.0.0/0" ]] || die "LAN_CIDR に 0.0.0.0/0 は指定できません。"
@@ -597,13 +661,18 @@ App host:           ${values[APP_HOST]:-}
 Frontend origin:    ${values[FRONTEND_ORIGIN]:-}
 Frontend URL:       ${values[FRONTEND_URL]:-}
 PostgreSQL role:    ${postgres_role}
-PostgreSQL DB:      ${postgres_database}
+PostgreSQL host:    ${postgres_host}
+PostgreSQL port:    ${postgres_port}
+PostgreSQL DBs:     mitsubachi_production, mitsubachi_production_cache, mitsubachi_production_queue, mitsubachi_production_cable
 Enable UFW:         ${enable_ufw}
 Allow SSH:          ${allow_ssh}
 Rails env file:     ${RAILS_ENV_DEST}
 Rails master key:   $(summary_secret_state RAILS_MASTER_KEY)
 Secret key base:    $(summary_secret_state SECRET_KEY_BASE)
 Database URL:       $(summary_secret_state DATABASE_URL)
+Cache DB URL:       $(summary_secret_state DATABASE_CACHE_URL)
+Queue DB URL:       $(summary_secret_state DATABASE_QUEUE_URL)
+Cable DB URL:       $(summary_secret_state DATABASE_CABLE_URL)
 Resend API key:     $(summary_secret_state RESEND_API_KEY)
 SUMMARY
 
@@ -634,6 +703,8 @@ write_config_file() {
     printf 'DEPLOY_USER=%s\n' "${deploy_user}"
     printf 'DEPLOY_GROUP=%s\n' "${deploy_group}"
     printf 'POSTGRES_ROLE=%s\n' "${postgres_role}"
+    printf 'POSTGRES_HOST=%s\n' "${postgres_host}"
+    printf 'POSTGRES_PORT=%s\n' "${postgres_port}"
     printf 'POSTGRES_DATABASE=%s\n' "${postgres_database}"
     printf 'KEEP_RELEASES=%s\n' "${keep_releases}"
     printf 'ENABLE_UFW=%s\n' "${enable_ufw}"
@@ -678,7 +749,7 @@ compose_rails_env() {
       fi
     done < "${RAILS_ENV_DEST}"
   fi
-  for key in RAILS_ENV RAILS_LOG_TO_STDOUT RAILS_LOG_LEVEL RAILS_SERVE_STATIC_FILES RAILS_MASTER_KEY SECRET_KEY_BASE DATABASE_URL FILE_STORAGE_ROOT BULK_DOWNLOAD_TMP MAX_UPLOAD_SIZE_BYTES APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE RAILS_MAX_THREADS WEB_CONCURRENCY PORT RESEND_API_KEY MAIL_FROM; do
+  for key in RAILS_ENV RAILS_LOG_TO_STDOUT RAILS_LOG_LEVEL RAILS_SERVE_STATIC_FILES RAILS_MASTER_KEY SECRET_KEY_BASE DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL FILE_STORAGE_ROOT BULK_DOWNLOAD_TMP MAX_UPLOAD_SIZE_BYTES APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE RAILS_MAX_THREADS WEB_CONCURRENCY PORT RESEND_API_KEY MAIL_FROM; do
     [[ -v "written[${key}]" ]] && continue
     printf '%s=%s\n' "${key}" "${values[${key}]:-}" >> "${output}"
   done
