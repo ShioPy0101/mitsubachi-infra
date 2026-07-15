@@ -1,0 +1,31 @@
+[Unit]
+Description=Mitsubachi Rails API
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+RequiresMountsFor=/mnt/external-hdd/mitsubachi/files
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+EnvironmentFile=/etc/mitsubachi/rails.env
+WorkingDirectory=/var/www/mitsubachi/current
+Environment=RBENV_ROOT=/home/deploy/.rbenv
+Environment=PATH=/home/deploy/.rbenv/shims:/home/deploy/.rbenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=/usr/bin/test -L /var/www/mitsubachi/current
+ExecStartPre=/usr/bin/test -f /var/www/mitsubachi/current/Gemfile
+ExecStartPre=/usr/bin/test -f /etc/mitsubachi/rails.env
+ExecStartPre=/usr/bin/mountpoint -q /mnt/external-hdd
+ExecStartPre=/usr/bin/test -d /mnt/external-hdd/mitsubachi/files/drive_items
+ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/drive_items
+ExecStart=/home/deploy/.rbenv/shims/bundle exec puma -e production -b tcp://127.0.0.1:3001
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=60s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
