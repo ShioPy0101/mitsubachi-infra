@@ -66,6 +66,14 @@ grep -F 'bash -c '\''set -Eeuo pipefail; cd "$HOME"; "$@"'\'' bash "$@"' "${ROOT
 grep -F 'bash -c '\''set -Eeuo pipefail; cd "$HOME"; "$@"'\'' bash "$@"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap deploy execution changes to deploy HOME"
 # shellcheck disable=SC2016
 grep -F 'run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" install "${RUBY_VERSION}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap ruby install runs through deploy HOME wrapper"
+# shellcheck disable=SC2016
+grep -F 'ruby_is_installed "${RUBY_VERSION}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap checks real Ruby before build"
+# shellcheck disable=SC2016
+grep -F 'Ruby ${RUBY_VERSION} は deploy ユーザーの rbenv にインストール済みです。ビルドをスキップします。' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap logs Ruby build skip"
+# shellcheck disable=SC2016
+grep -F 'gem install bundler --version "${BUNDLER_VERSION}" --no-document' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap installs requested Bundler version idempotently"
+# shellcheck disable=SC2016
+grep -F 'Bundler ${BUNDLER_VERSION} はインストール済みです。install をスキップします。' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap logs Bundler version skip"
 if rg -n 'sudo -u deploy +(git|/home/deploy|env RBENV_ROOT)|sudo -u deploy git|sudo -u deploy /home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null 2>&1; then
   fail "bootstrap must not run deploy git/rbenv commands directly from caller cwd"
 fi
@@ -78,6 +86,24 @@ if rg -n 'bootstrap_args=\(--app-repo|bootstrap_args\+=\(--app-repo' "${ROOT}/sc
   fail "install must not pass SSH app repo to root bootstrap"
 fi
 grep -F '既定 version で続行します' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap optional discovery continues on failure"
+# shellcheck disable=SC2016
+grep -F 'NGINX_BACKUP_DIR="${NGINX_BACKUP_DIR:-/etc/nginx/backups}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap nginx backups are outside sites-enabled"
+# shellcheck disable=SC2016
+grep -F 'move_misplaced_enabled_backups "${timestamp}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap moves old sites-enabled bak files"
+# shellcheck disable=SC2016
+grep -F 'restore_nginx_path "${previous_available_backup}" "${available_path}" "${keep_available_on_rollback}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap restores available config on nginx test failure"
+# shellcheck disable=SC2016
+grep -F 'restore_nginx_path "${previous_enabled_backup}" "${enabled_path}" "${keep_enabled_on_rollback}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap restores enabled config on nginx test failure"
+# shellcheck disable=SC2016
+grep -F 'restore_nginx_path "${previous_default_backup}" "${default_path}" false' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap restores default site on nginx test failure"
+grep -F 'if ! nginx -t; then' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap tests nginx before reload"
+nginx_test_line="$(rg -n 'if ! nginx -t; then' "${ROOT}/scripts/bootstrap_ubuntu.sh" | cut -d: -f1 | tail -n1)"
+reload_line="$(rg -n 'systemctl reload nginx' "${ROOT}/scripts/bootstrap_ubuntu.sh" | cut -d: -f1 | tail -n1)"
+[[ -n "${nginx_test_line}" && -n "${reload_line}" ]] || fail "bootstrap nginx test/reload markers exist"
+(( nginx_test_line < reload_line )) || fail "bootstrap reloads nginx only after nginx -t"
+if rg -n 'backup_if_exists /etc/nginx/sites-enabled|sites-enabled/.+\\.bak' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null 2>&1; then
+  fail "bootstrap must not leave nginx backups in sites-enabled"
+fi
 ensure_line="$(rg -n '^ensure_deploy_account$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 env_line="$(rg -n '^install_rails_env_file$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 bootstrap_line="$(rg -n 'sudo_cmd "\$\{SCRIPT_DIR\}/bootstrap_ubuntu.sh"' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
