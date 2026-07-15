@@ -74,6 +74,7 @@ grep -F 'Ruby ${RUBY_VERSION} は deploy ユーザーの rbenv にインスト�
 grep -F 'gem install bundler --version "${BUNDLER_VERSION}" --no-document' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap installs requested Bundler version idempotently"
 # shellcheck disable=SC2016
 grep -F 'Bundler ${BUNDLER_VERSION} はインストール済みです。install をスキップします。' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap logs Bundler version skip"
+grep -F 'return 0' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap cleanup has explicit successful return"
 if rg -n 'sudo -u deploy +(git|/home/deploy|env RBENV_ROOT)|sudo -u deploy git|sudo -u deploy /home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null 2>&1; then
   fail "bootstrap must not run deploy git/rbenv commands directly from caller cwd"
 fi
@@ -104,11 +105,22 @@ reload_line="$(rg -n 'systemctl reload nginx' "${ROOT}/scripts/bootstrap_ubuntu.
 if rg -n 'backup_if_exists /etc/nginx/sites-enabled|sites-enabled/.+\\.bak' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null 2>&1; then
   fail "bootstrap must not leave nginx backups in sites-enabled"
 fi
+# shellcheck disable=SC2016
+grep -F 'load_systemd_env_file "${RAILS_ENV_FILE}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap reads DATABASE_URL from rails env for PostgreSQL"
+grep -F 'CREATE ROLE "%s" LOGIN PASSWORD %s;' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap creates PostgreSQL role with password"
+grep -F 'PostgreSQL role は既に存在するため password は変更しません' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap keeps existing PostgreSQL role password"
+# shellcheck disable=SC2016
+grep -F 'PGPASSWORD="${POSTGRES_URL_PASSWORD}" psql' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap verifies PostgreSQL password authentication"
 ensure_line="$(rg -n '^ensure_deploy_account$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 env_line="$(rg -n '^install_rails_env_file$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 bootstrap_line="$(rg -n 'sudo_cmd "\$\{SCRIPT_DIR\}/bootstrap_ubuntu.sh"' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
+deploy_line="$(rg -n 'run_as_deploy "\$\{deploy_user\}" "\$\{deploy_home\}" "\$\{SCRIPT_DIR\}/deploy_api.sh"' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 [[ -n "${ensure_line}" && -n "${env_line}" && -n "${bootstrap_line}" ]] || fail "install phase order markers exist"
 (( ensure_line < env_line && env_line < bootstrap_line )) || fail "install phase order must be account, rails.env, bootstrap"
+[[ -n "${deploy_line}" ]] || fail "install deploy_api marker exists"
+(( bootstrap_line < deploy_line )) || fail "install proceeds to deploy_api after bootstrap"
+# shellcheck disable=SC2016
+grep -F 'bootstrap_args+=(--create-db-role "${postgres_role}" --create-db "${postgres_database}")' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install passes PostgreSQL role/database to bootstrap"
 pass "install sudo/user boundary static checks"
 
 tmpdir="$(mktemp -d)"
@@ -300,6 +312,15 @@ if rg -n 'unbound variable|未割り当ての変数' /tmp/mitsubachi-test.err >/
 fi
 rg -n 'RAILS_MASTER_KEY が不足しています' /tmp/mitsubachi-test.err >/dev/null || fail "install missing required value lacks explicit error"
 pass "install missing required value reports explicit error"
+
+run_expect_failure "common ERR trap reports command and redacts secrets" bash -c "source '${ROOT}/scripts/lib/common.sh'; set_stage trap-test; DATABASE_URL=postgresql://mitsubachi:super-secret@127.0.0.1:5432/mitsubachi_production false"
+grep -F '処理段階=trap-test' /tmp/mitsubachi-test.err >/dev/null || fail "ERR trap reports stage"
+grep -F '失敗コマンド=' /tmp/mitsubachi-test.err >/dev/null || fail "ERR trap reports failed command"
+grep -F '呼び出し行=' /tmp/mitsubachi-test.err >/dev/null || fail "ERR trap reports caller line"
+if rg -n 'super-secret' /tmp/mitsubachi-test.err >/dev/null 2>&1; then
+  fail "ERR trap leaked DATABASE_URL password"
+fi
+pass "ERR trap diagnostics redact secrets"
 
 if rg -n 'RAILS_MASTER_KEY|SECRET_KEY_BASE|DATABASE_URL|RESEND_API_KEY' "${install_config}" >/dev/null 2>&1; then
   fail "config/local.env contains secret keys"

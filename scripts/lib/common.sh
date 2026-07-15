@@ -27,6 +27,7 @@ SERVICE_NAME="${SERVICE_NAME:-mitsubachi-api}"
 LOCK_DIR="${LOCK_DIR:-/tmp/mitsubachi-infra-locks}"
 CURRENT_STAGE="${CURRENT_STAGE:-init}"
 SECRET_KEYS_REGEX='^(DATABASE_URL|RAILS_MASTER_KEY|SECRET_KEY_BASE|RESEND_API_KEY)='
+ERROR_TRAP_ACTIVE=false
 
 log() {
   printf '[%s] [%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${0##*/}" "$*" >&2
@@ -40,10 +41,19 @@ die() {
 on_error() {
   local line_no="$1"
   local exit_code="$2"
-  printf '[%s] [%s] エラー: 処理段階=%s 行=%s 終了コード=%s\n' \
-    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${0##*/}" "${CURRENT_STAGE}" "${line_no}" "${exit_code}" >&2
+  local command="${3:-unknown}"
+  local caller_line="${BASH_LINENO[0]:-unknown}"
+  local function_name="${FUNCNAME[1]:-main}"
+  if [[ "${ERROR_TRAP_ACTIVE}" == true ]]; then
+    return 0
+  fi
+  ERROR_TRAP_ACTIVE=true
+  command="$(redact_log_text "${command}")"
+  printf '[%s] [%s] エラー: 処理段階=%s 終了コード=%s 失敗コマンド=%s 呼び出し行=%s trap行=%s 関数=%s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${0##*/}" "${CURRENT_STAGE}" "${exit_code}" \
+    "${command}" "${caller_line}" "${line_no}" "${function_name}" >&2
 }
-trap 'on_error "$LINENO" "$?"' ERR
+trap 'on_error "$LINENO" "$?" "$BASH_COMMAND"' ERR
 
 set_stage() {
   CURRENT_STAGE="$1"
@@ -159,6 +169,18 @@ redact_env_line() {
   else
     printf '%s\n' "${line}"
   fi
+}
+
+redact_log_text() {
+  local text="$1"
+  text="$(sed -E \
+    -e 's#(DATABASE_URL=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(RAILS_MASTER_KEY=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(SECRET_KEY_BASE=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(RESEND_API_KEY=)[^[:space:]]+#\1<redacted>#g' \
+    -e 's#(postgres(ql)?://[^:/@[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\3#g' \
+    <<< "${text}")"
+  printf '%s\n' "${text}"
 }
 
 health_check_retry() {

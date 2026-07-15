@@ -97,6 +97,100 @@ bundler_is_installed() {
   fi
 }
 
+url_decode_component() {
+  local value="$1"
+  printf '%b' "${value//%/\\x}"
+}
+
+sql_literal() {
+  local value="$1"
+  local quote="'"
+  local escaped
+  escaped="${value//${quote}/${quote}${quote}}"
+  printf "'%s'" "${escaped}"
+}
+
+parse_database_url_for_postgres_bootstrap() {
+  local url authority_path authority userinfo hostport encoded_role encoded_password encoded_db
+  url="${DATABASE_URL:-}"
+  [[ -n "${url}" ]] || die "CREATE_DB 指定時は ${RAILS_ENV_FILE} の DATABASE_URL が必要です。"
+  case "${url}" in
+    postgres://*|postgresql://*) ;;
+    *) die "DATABASE_URL は postgres:// または postgresql:// 形式である必要があります。" ;;
+  esac
+  authority_path="${url#*://}"
+  authority="${authority_path%%/*}"
+  encoded_db="${authority_path#*/}"
+  encoded_db="${encoded_db%%\?*}"
+  encoded_db="${encoded_db%%#*}"
+  [[ "${authority}" == *"@"* ]] || die "DATABASE_URL に PostgreSQL user/password が含まれていません。"
+  userinfo="${authority%@*}"
+  hostport="${authority#*@}"
+  [[ "${userinfo}" == *":"* ]] || die "DATABASE_URL に PostgreSQL password が含まれていません。"
+  encoded_role="${userinfo%%:*}"
+  encoded_password="${userinfo#*:}"
+  POSTGRES_URL_ROLE="$(url_decode_component "${encoded_role}")"
+  POSTGRES_URL_PASSWORD="$(url_decode_component "${encoded_password}")"
+  POSTGRES_URL_DATABASE="$(url_decode_component "${encoded_db}")"
+  POSTGRES_URL_HOST="${hostport%%:*}"
+  if [[ "${hostport}" == *":"* ]]; then
+    POSTGRES_URL_PORT="${hostport##*:}"
+  else
+    POSTGRES_URL_PORT="5432"
+  fi
+  [[ "${POSTGRES_URL_ROLE}" == "${CREATE_DB_ROLE}" ]] || die "DATABASE_URL の role と --create-db-role が一致しません。"
+  [[ "${POSTGRES_URL_DATABASE}" == "${CREATE_DB}" ]] || die "DATABASE_URL の database と --create-db が一致しません。"
+  [[ -n "${POSTGRES_URL_PASSWORD}" ]] || die "DATABASE_URL の PostgreSQL password が空です。"
+  [[ "${POSTGRES_URL_PORT}" =~ ^[0-9]+$ ]] || die "DATABASE_URL の PostgreSQL port が不正です。"
+}
+
+psql_scalar_as_postgres() {
+  local sql="$1"
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -Atqc "${sql}"
+}
+
+ensure_postgres_role_database() {
+  [[ -n "${CREATE_DB}" && -n "${CREATE_DB_ROLE}" ]] || die "--create-db and --create-db-role must be supplied together"
+  [[ "${CREATE_DB}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "unsafe database name"
+  [[ "${CREATE_DB_ROLE}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "unsafe database role"
+  load_systemd_env_file "${RAILS_ENV_FILE}"
+  parse_database_url_for_postgres_bootstrap
+
+  local role_exists db_owner password_sql
+  role_exists="$(psql_scalar_as_postgres "SELECT 1 FROM pg_roles WHERE rolname = $(sql_literal "${CREATE_DB_ROLE}")")"
+  if [[ "${role_exists}" == "1" ]]; then
+    log "PostgreSQL role は既に存在するため password は変更しません: ${CREATE_DB_ROLE}"
+  else
+    password_sql="$(sql_literal "${POSTGRES_URL_PASSWORD}")"
+    printf 'CREATE ROLE "%s" LOGIN PASSWORD %s;\n' "${CREATE_DB_ROLE}" "${password_sql}" |
+      sudo -u postgres psql -v ON_ERROR_STOP=1
+    log "PostgreSQL role を作成しました: ${CREATE_DB_ROLE}"
+  fi
+
+  db_owner="$(psql_scalar_as_postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = $(sql_literal "${CREATE_DB}")")"
+  if [[ -z "${db_owner}" ]]; then
+    printf 'CREATE DATABASE "%s" OWNER "%s";\n' "${CREATE_DB}" "${CREATE_DB_ROLE}" |
+      sudo -u postgres psql -v ON_ERROR_STOP=1
+    log "PostgreSQL database を作成しました: ${CREATE_DB}"
+  elif [[ "${db_owner}" == "${CREATE_DB_ROLE}" ]]; then
+    log "PostgreSQL database は既に存在し、owner も一致しています: ${CREATE_DB}"
+  else
+    die "PostgreSQL database owner が一致しません。database=${CREATE_DB} owner=${db_owner} expected=${CREATE_DB_ROLE}"
+  fi
+
+  if PGPASSWORD="${POSTGRES_URL_PASSWORD}" psql \
+    -h "${POSTGRES_URL_HOST}" \
+    -p "${POSTGRES_URL_PORT}" \
+    -U "${CREATE_DB_ROLE}" \
+    -d "${CREATE_DB}" \
+    -v ON_ERROR_STOP=1 \
+    -Atqc 'SELECT 1' >/dev/null; then
+    log "PostgreSQL role/database/password の接続確認に成功しました: role=${CREATE_DB_ROLE} database=${CREATE_DB}"
+  else
+    die "PostgreSQL 接続確認に失敗しました。既存 role の password 不一致、pg_hba.conf、host/port、database owner を確認してください。"
+  fi
+}
+
 nginx_backup_path() {
   local path="$1"
   local timestamp="$2"
@@ -271,7 +365,10 @@ set_stage "optional version discovery"
 log "Rails API リポジトリから Ruby / Bundler version を必要に応じて検出します。"
 tmp_repo=""
 cleanup() {
-  [[ -n "${tmp_repo}" && -d "${tmp_repo}" ]] && rm -rf -- "${tmp_repo}"
+  if [[ -n "${tmp_repo}" && -d "${tmp_repo}" ]]; then
+    rm -rf -- "${tmp_repo}"
+  fi
+  return 0
 }
 trap cleanup EXIT
 if [[ -n "${APP_REPO}" && ( -z "${RUBY_VERSION}" || -z "${BUNDLER_VERSION}" ) ]]; then
@@ -329,20 +426,7 @@ run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" rehash
 set_stage "postgres optional create"
 log "PostgreSQL role/database は明示指定された場合だけ冪等に作成します。既存 DB は削除しません。"
 if [[ -n "${CREATE_DB}" || -n "${CREATE_DB_ROLE}" ]]; then
-  [[ -n "${CREATE_DB}" && -n "${CREATE_DB_ROLE}" ]] || die "--create-db and --create-db-role must be supplied together"
-  [[ "${CREATE_DB}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "unsafe database name"
-  [[ "${CREATE_DB_ROLE}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "unsafe database role"
-  sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
-DO \$\$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${CREATE_DB_ROLE}') THEN
-    CREATE ROLE "${CREATE_DB_ROLE}" LOGIN;
-  END IF;
-END
-\$\$;
-SELECT 'CREATE DATABASE "${CREATE_DB}" OWNER "${CREATE_DB_ROLE}"'
-WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '${CREATE_DB}')\gexec
-SQL
+  ensure_postgres_role_database
 fi
 
 set_stage "nginx and systemd install"

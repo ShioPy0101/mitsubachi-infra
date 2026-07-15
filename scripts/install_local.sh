@@ -727,7 +727,7 @@ if [[ "${DRY_RUN}" == true ]]; then
   log "[DRY-RUN] create system user if missing: ${deploy_user}"
   log "[DRY-RUN] create directory: /etc/mitsubachi owner=root group=${deploy_group} mode=0750"
   log "[DRY-RUN] install rails env: ${RAILS_ENV_DEST} owner=root group=${deploy_group} mode=0640"
-  log "[DRY-RUN] run bootstrap_ubuntu.sh as root before rails.env placement"
+  log "[DRY-RUN] run bootstrap_ubuntu.sh as root after rails.env placement"
   log "dry-run のため、設定ファイル作成、bootstrap、LAN 設定、deploy は実行しません。"
   exit 0
 fi
@@ -746,6 +746,9 @@ fi
 install_rails_env_file
 
 bootstrap_args=(--install-nginx-config --install-systemd-unit)
+if [[ -n "${postgres_role}" && -n "${postgres_database}" ]]; then
+  bootstrap_args+=(--create-db-role "${postgres_role}" --create-db "${postgres_database}")
+fi
 if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}" == true ]]; then
   bootstrap_args+=(--remove-default-site)
 fi
