@@ -1,0 +1,30 @@
+deployment_mode: lan
+server_ip: 192.168.1.50
+lan_cidr: 192.168.1.0/24
+
+deploy:
+  user: deploy
+  home: /home/deploy
+  app_root: /var/www/mitsubachi
+
+backend:
+  repository: git@github.com:ShioPy0101/mitsubachi-ruby.git
+  ref: main
+  keep_releases: 5
+  health_path: /api/health
+
+frontend:
+  repository: git@github.com:ShioPy0101/mitsubachi-front.git
+  ref: main
+  keep_releases: 5
+  build_command:
+    - npm
+    - run
+    - build
+  output_directory: dist
+
+https:
+  host:
+  email:
+  staging: false
+  challenge: http-01

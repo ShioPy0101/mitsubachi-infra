@@ -89,6 +89,68 @@ browser
 
 Rails/Puma の `127.0.0.1:3001` と PostgreSQL の `5432` は LAN に公開しません。LAN client から見える入口は Nginx の `:80` だけです。
 
+## Ruby CLI
+
+通常運用の入口は Ruby 製 CLI の `mitsubachi-infra` です。Infra CLI は Rails アプリケーションの `Gemfile` や release directory に依存せず、system Ruby と Ruby 標準ライブラリだけで起動します。Rails 用 Ruby/rbenv が壊れていても、状態確認や復旧操作を始められることを優先します。
+
+```bash
+sudo mitsubachi-infra install --interactive
+sudo mitsubachi-infra deploy
+sudo mitsubachi-infra deploy backend --ref main
+sudo mitsubachi-infra deploy frontend --ref main
+sudo mitsubachi-infra rollback backend
+sudo mitsubachi-infra rollback frontend
+sudo mitsubachi-infra status
+sudo mitsubachi-infra status --json
+sudo mitsubachi-infra https check
+sudo mitsubachi-infra https enable --staging
+sudo mitsubachi-infra https enable
+sudo mitsubachi-infra https renew
+sudo mitsubachi-infra https status
+```
+
+`--dry-run` は `install`、`deploy`、`rollback`、`https enable` などで利用できます。dry-run でも secret は表示しません。
+
+Shell に残している主な処理は `scripts/install_local.sh` の最小 bootstrap だけです。これは root 権限確認、`ruby-full` / `git` / `sudo` の導入、`bin/mitsubachi-infra install` の起動だけを担当します。既存の `deploy_api.sh` などは互換・移行用として残していますが、新しい通常運用は Ruby CLI 側へ移します。
+
+CLI の主な責務:
+
+```text
+lib/mitsubachi_infra/command_runner.rb
+  OS command 実行、dry-run、secret masking、deploy ユーザー実行。
+
+lib/mitsubachi_infra/configuration.rb
+  /etc/mitsubachi/config.yml の読み込みと検証。
+
+lib/mitsubachi_infra/deployment/
+  backend/frontend release deploy と rollback。
+
+lib/mitsubachi_infra/nginx.rb
+  Nginx ERB template の配置、nginx -t、reload。
+
+lib/mitsubachi_infra/certbot.rb
+  Nginx + Certbot + Let's Encrypt の HTTP-01 enable/renew。
+```
+
+設定 schema 例は `env/config.yml.example` を参照してください。非秘密の infra 設定は `/etc/mitsubachi/config.yml` に保存します。Rails secret と DB password を含む値は `/etc/mitsubachi/rails.env` に分離します。frontend env には DB password、Rails master key、secret key base、署名鍵、証明書秘密鍵、ACME credential を置かないでください。
+
+新しい release directory は次を基本形にします。
+
+```text
+/var/www/mitsubachi/
+├── backend/
+│   ├── current -> releases/<release-id>
+│   ├── releases/
+│   └── shared/
+├── frontend/
+│   ├── current -> releases/<release-id>
+│   ├── releases/
+│   └── shared/
+└── repositories/
+```
+
+既存の `/var/www/mitsubachi/current` は無条件削除しません。移行時は既存 release と shared data を確認し、必要なら backend/current へ手動で移した後に Ruby CLI deploy を開始してください。
+
 ## 正式なディレクトリ設計
 
 この節のパスを正式な設計として採用します。README、シェルスクリプト、Nginx 設定、systemd unit、環境変数雛形、テストはこの構成に揃えています。
@@ -485,6 +547,53 @@ sudo ./scripts/configure_local_network.sh \
 ```
 
 `0.0.0.0/0` は拒否します。TCP 80 は指定 LAN CIDR からのみ許可します。TCP 22 は LAN CIDR または `--ssh-cidr` からのみ許可します。TCP 3001 と 5432 は許可しません。UFW reset は行いません。
+
+## Public HTTPS
+
+public mode は Nginx + Certbot + Let's Encrypt で実装します。Caddy は使用しません。
+
+`/etc/mitsubachi/config.yml` で `deployment_mode: public`、`https.host`、`https.email` を設定し、先に DNS と port forwarding を確認してください。
+
+```bash
+sudo mitsubachi-infra https check
+sudo mitsubachi-infra https enable --staging
+sudo mitsubachi-infra https enable
+sudo mitsubachi-infra https renew
+sudo mitsubachi-infra https status
+```
+
+HTTPS enable は HTTP-01 challenge 用 Nginx 設定を先に配置し、`nginx -t` 成功後に Certbot を実行します。証明書取得前に存在しない証明書 path を参照する HTTPS 設定へ切り替えません。staging certificate はブラウザで信頼されません。rate limit 回避の検証用として使ってください。
+
+router / DNS:
+
+```text
+TCP 80
+  ACME HTTP-01 challenge と HTTP -> HTTPS redirect に必要。
+
+TCP 443
+  public HTTPS に必要。
+
+A / AAAA record
+  files.example.com などの hostname を自宅サーバーの public IP へ向ける。
+
+CGNAT
+  ISP の CGNAT 配下では通常の port forwarding が使えない可能性がある。
+```
+
+UFW では 80/443 を開けても、SSH は無条件に全世界へ公開しないでください。LAN CIDR、管理元 CIDR、VPN、Tailscale 等の明示範囲に限定してください。PostgreSQL、Puma、Node.js development server は外部公開しません。
+
+Cloudflare:
+
+```text
+DNS only
+  通信は自宅サーバーへ直接到達する。origin 側に証明書が必要で、80/443 forwarding も必要。
+
+Cloudflare Proxy
+  Cloudflare 経由になる。real IP 設定、upload size、timeout、大容量 download/stream への影響を確認する。origin HTTPS を推奨。
+
+Cloudflare Tunnel
+  将来追加可能な構造にするが、この Infra の初期実装では必須にしない。
+```
 
 ## Environment variables
 

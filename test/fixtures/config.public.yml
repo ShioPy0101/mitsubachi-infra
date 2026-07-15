@@ -1,0 +1,26 @@
+deployment_mode: public
+server_ip: 192.168.1.50
+lan_cidr: 192.168.1.0/24
+deploy:
+  user: deploy
+  home: /home/deploy
+  app_root: /tmp/mitsubachi-test-app
+backend:
+  repository: git@github.com:ShioPy0101/mitsubachi-ruby.git
+  ref: main
+  keep_releases: 2
+  health_path: /api/health
+frontend:
+  repository: git@github.com:ShioPy0101/mitsubachi-front.git
+  ref: main
+  keep_releases: 2
+  build_command:
+    - npm
+    - run
+    - build
+  output_directory: dist
+https:
+  host: files.example.com
+  email: ops@example.com
+  staging: false
+  challenge: http-01

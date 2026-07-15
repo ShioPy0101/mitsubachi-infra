@@ -1,0 +1,30 @@
+[Unit]
+Description=Mitsubachi Rails API
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+RequiresMountsFor=/mnt/external-hdd/mitsubachi/files
+
+[Service]
+Type=simple
+User=<%= @config.fetch("deploy").fetch("user") %>
+Group=<%= @config.fetch("deploy").fetch("user") %>
+EnvironmentFile=/etc/mitsubachi/rails.env
+WorkingDirectory=<%= File.join(@config.backend_root, "current") %>
+Environment=RBENV_ROOT=<%= File.join(@config.fetch("deploy").fetch("home"), ".rbenv") %>
+Environment=PATH=<%= File.join(@config.fetch("deploy").fetch("home"), ".rbenv/shims") %>:<%= File.join(@config.fetch("deploy").fetch("home"), ".rbenv/bin") %>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=/usr/bin/test -L <%= File.join(@config.backend_root, "current") %>
+ExecStartPre=/usr/bin/test -f <%= File.join(@config.backend_root, "current", "Gemfile") %>
+ExecStartPre=/usr/bin/test -f /etc/mitsubachi/rails.env
+ExecStartPre=/usr/bin/mountpoint -q /mnt/external-hdd
+ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/drive_items
+ExecStart=<%= File.join(@config.fetch("deploy").fetch("home"), ".rbenv/shims/bundle") %> exec puma -e production -b tcp://127.0.0.1:3001
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=60s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
