@@ -61,6 +61,12 @@ grep -F "env HOME=\"\${home}\"" "${ROOT}/scripts/install_local.sh" >/dev/null ||
 grep -F "RBENV_ROOT=\"\${home}/.rbenv\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy RBENV_ROOT is explicit"
 grep -F "PATH=\"\${home}/.rbenv/bin:\${home}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy PATH is explicit"
 grep -F 'sudo -u deploy env HOME=/home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap app repo clone uses deploy HOME"
+grep -F 'check_repository_access()' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install has invoking-user repository access check"
+grep -F "git ls-remote \"\${repository}\" HEAD" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install repository check uses git without sudo"
+if rg -n 'bootstrap_args=\(--app-repo|bootstrap_args\+=\(--app-repo' "${ROOT}/scripts/install_local.sh" >/dev/null 2>&1; then
+  fail "install must not pass SSH app repo to root bootstrap"
+fi
+grep -F '既定 version で続行します' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap optional discovery continues on failure"
 ensure_line="$(rg -n '^ensure_deploy_account$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 env_line="$(rg -n '^install_rails_env_file$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
 bootstrap_line="$(rg -n 'sudo_cmd "\$\{SCRIPT_DIR\}/bootstrap_ubuntu.sh"' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"

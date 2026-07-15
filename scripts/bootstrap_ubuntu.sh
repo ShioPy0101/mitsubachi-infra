@@ -115,13 +115,16 @@ if [[ -n "${APP_REPO}" && ( -z "${RUBY_VERSION}" || -z "${BUNDLER_VERSION}" ) ]]
   # Rails repository may be private.  Version discovery must therefore use the
   # same deploy user's SSH configuration as real deployments, never root's
   # /root/.ssh created by sudo execution.
-  sudo -u deploy env HOME=/home/deploy \
-    git clone --depth 1 -- "${APP_REPO}" "${tmp_repo}"
-  if [[ -z "${RUBY_VERSION}" && -f "${tmp_repo}/.ruby-version" ]]; then
-    RUBY_VERSION="$(tr -d '[:space:]' < "${tmp_repo}/.ruby-version")"
-  fi
-  if [[ -z "${BUNDLER_VERSION}" && -f "${tmp_repo}/Gemfile.lock" ]]; then
-    BUNDLER_VERSION="$(awk '/^BUNDLED WITH$/ {getline; gsub(/^[[:space:]]+/, "", $0); print; exit}' "${tmp_repo}/Gemfile.lock")"
+  if sudo -u deploy env HOME=/home/deploy \
+    git clone --depth 1 -- "${APP_REPO}" "${tmp_repo}"; then
+    if [[ -z "${RUBY_VERSION}" && -f "${tmp_repo}/.ruby-version" ]]; then
+      RUBY_VERSION="$(tr -d '[:space:]' < "${tmp_repo}/.ruby-version")"
+    fi
+    if [[ -z "${BUNDLER_VERSION}" && -f "${tmp_repo}/Gemfile.lock" ]]; then
+      BUNDLER_VERSION="$(awk '/^BUNDLED WITH$/ {getline; gsub(/^[[:space:]]+/, "", $0); print; exit}' "${tmp_repo}/Gemfile.lock")"
+    fi
+  else
+    log "任意の Ruby/Bundler version discovery に失敗しました。APP_REPO=${APP_REPO} user=deploy HOME=/home/deploy SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-未設定}。通常ユーザーで ssh -T git@github.com と git ls-remote を確認してください。既定 version で続行します。"
   fi
 fi
 RUBY_VERSION="${RUBY_VERSION:-3.3.6}"

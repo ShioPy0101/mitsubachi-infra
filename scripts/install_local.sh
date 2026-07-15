@@ -97,6 +97,22 @@ run_as_deploy() {
     "$@"
 }
 
+check_repository_access() {
+  local repository="$1"
+  log "checking repository access as invoking user: user=$(id -un) home=${INVOKING_HOME} repo=${repository}"
+  if ! git ls-remote "${repository}" HEAD >/dev/null 2>&1; then
+    printf '[%s] [%s] エラー: GitHubリポジトリへアクセスできません。\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${0##*/}" >&2
+    printf '実行ユーザー: %s\n' "$(id -un)" >&2
+    printf 'HOME: %s\n' "${INVOKING_HOME:-未設定}" >&2
+    printf 'SSH_AUTH_SOCK: %s\n' "${SSH_AUTH_SOCK:-未設定}" >&2
+    printf '対象リポジトリ: %s\n' "${repository}" >&2
+    printf '通常ユーザーで次を確認してください:\n' >&2
+    printf '  ssh -T git@github.com\n' >&2
+    printf "  git ls-remote '%s' HEAD\n" "${repository}" >&2
+    return 1
+  fi
+}
+
 set_cli_value() {
   local key="$1"
   local value="$2"
@@ -543,6 +559,8 @@ if [[ "${DRY_RUN}" != true ]]; then
   sudo -v || die "sudo を利用できないため停止します。apt、/etc、/var、/mnt、systemd、Nginx、UFW の設定に sudo が必要です。"
   log "checking external HDD mount before installation starts"
   mountpoint -q "${EXTERNAL_HDD}" || die "${EXTERNAL_HDD} は mount point ではありません。外付け HDD 未 mount のまま install を開始しません。"
+  require_command git
+  check_repository_access "${rails_repo_url}" || die "Rails repository access check failed before privileged installation steps."
 fi
 
 for key in "${!values[@]}"; do
@@ -722,7 +740,7 @@ if [[ -f "${RAILS_ENV_DEST}" && "${OVERWRITE_RAILS_ENV}" != true ]]; then
 fi
 install_rails_env_file
 
-bootstrap_args=(--app-repo "${rails_repo_url}" --install-nginx-config --install-systemd-unit)
+bootstrap_args=(--install-nginx-config --install-systemd-unit)
 if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}" == true ]]; then
   bootstrap_args+=(--remove-default-site)
 fi
@@ -743,12 +761,6 @@ sudo_cmd "${SCRIPT_DIR}/configure_local_network.sh" "${network_args[@]}"
 log "checking deploy user Ruby/Bundler visibility in a non-interactive rbenv environment"
 run_as_deploy "${deploy_user}" "${deploy_home}" bash -lc 'command -v ruby >/dev/null && ruby -v >/dev/null && command -v bundle >/dev/null && bundle -v >/dev/null' \
   || die "deploy ユーザー ${deploy_user} で ruby/bundle を実行できません。${deploy_home}/.rbenv の導入状態と PATH を確認してください。"
-
-if [[ "${rails_repo_url}" == git@*:* ]]; then
-  log "checking Rails repository access as ${deploy_user}; root の SSH 鍵は使用しません"
-  run_as_deploy "${deploy_user}" "${deploy_home}" git ls-remote "${rails_repo_url}" HEAD >/dev/null \
-    || die "deploy ユーザー ${deploy_user} で Rails repository を読めません。${deploy_home}/.ssh の read-only deploy key または HTTPS URL を確認してください。"
-fi
 
 run_as_deploy "${deploy_user}" "${deploy_home}" "${SCRIPT_DIR}/deploy_api.sh" \
   --repo-url "${rails_repo_url}" \

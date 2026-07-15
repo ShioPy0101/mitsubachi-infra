@@ -342,6 +342,8 @@ cd mitsubachi-infra
 
 `install_local.sh` 自体は root で実行しません。通常ユーザーで起動し、apt、`/etc`、`/var`、`/mnt`、systemd、Nginx、UFW など root 権限が必要な操作だけ内部で `sudo` を使います。root の `HOME` や `~/.ssh` を Git clone に使わないため、`sudo ./scripts/install_local.sh` は拒否します。
 
+Rails repository の SSH 認証確認は root ではなく、`install_local.sh` を起動した通常ユーザーで `git ls-remote` します。`sudo ssh -T git@github.com` が失敗しても、通常ユーザーの `ssh -T git@github.com` が成功していれば事前確認は通ります。root へ SSH 秘密鍵をコピーしないでください。
+
 ### 設定ファイルを使う方法
 
 ```bash
