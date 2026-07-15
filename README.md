@@ -299,7 +299,7 @@ git clone git@github.com:ShioPy0101/mitsubachi-infra.git
 cd mitsubachi-infra
 
 bash -n scripts/*.sh scripts/lib/*.sh
-shellcheck scripts/*.sh scripts/lib/*.sh
+shellcheck scripts/*.sh scripts/lib/*.sh test/run_shell_tests.sh
 bash test/run_shell_tests.sh
 ```
 
@@ -318,6 +318,107 @@ Ubuntu サーバー:
 ```bash
 git clone git@github.com:ShioPy0101/mitsubachi-infra.git
 cd mitsubachi-infra
+```
+
+### 対話セットアップ
+
+不足項目だけを対話入力し、最後に secret を伏せた summary を確認してから install を開始します。
+
+```bash
+sudo ./scripts/install_local.sh --interactive
+```
+
+`install_local.sh` の値の優先順位:
+
+```text
+1. 明示的なコマンドライン引数
+2. --config で指定された構築設定ファイル
+3. 既存の /etc/mitsubachi/rails.env、または --rails-env-file で指定した入力ファイル
+4. 対話入力
+5. 安全な既定値
+```
+
+標準入力と標準出力が TTY の場合だけ不足値を対話入力します。CI、cron、非対話 SSH では入力待ちで停止せず、`--non-interactive` 相当として扱います。`--interactive` と `--non-interactive` の同時指定は拒否します。
+
+### 設定ファイルを使う方法
+
+```bash
+cp config/local.env.example config/local.env
+cp env/rails.env.example env/rails.env
+
+sudo ./scripts/install_local.sh \
+  --config ./config/local.env \
+  --rails-env-file ./env/rails.env
+```
+
+`config/local.env` は非秘密情報だけを保存します。`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`DATABASE_URL`、`RESEND_API_KEY` は保存しません。`.gitignore` 対象です。
+
+`--rails-env-file ./env/rails.env` は入力元です。正式な配置先は systemd が読む `/etc/mitsubachi/rails.env` で、install 時に `root:deploy 0640` で配置します。
+
+### 非対話実行
+
+```bash
+sudo ./scripts/install_local.sh \
+  --config ./config/local.env \
+  --rails-env-file ./env/rails.env \
+  --non-interactive \
+  --yes
+```
+
+非対話モードでは必須値不足時に即時失敗し、confirmation も入力待ちも行いません。自動化で secret を生成する場合も、Infra 側は勝手に生成せず、`--rails-env-file` などで明示設定してください。
+
+事前確認だけを行う場合:
+
+```bash
+sudo ./scripts/install_local.sh \
+  --config ./config/local.env \
+  --rails-env-file ./env/rails.env \
+  --non-interactive \
+  --yes \
+  --dry-run
+```
+
+`--dry-run` は summary と値の採用元だけを表示し、`/etc/mitsubachi/rails.env`、`config/local.env`、secret file、systemd、Nginx、UFW、deploy を変更しません。secret の値そのものも stdout/stderr へ出しません。
+
+### Rails env の更新
+
+既存 `/etc/mitsubachi/rails.env` がある場合、`install_local.sh` は既存コメントと未知の key を可能な限り保持し、不足 key だけ追加します。既存 key は明示指定なしに変更しません。
+
+```text
+--update-rails-env
+  既存の非秘密 key の変更を許可する。
+
+--update-secrets
+  既存の secret key の変更を許可する。
+
+--overwrite-rails-env
+  既存ファイル全体を置換する。置換前に timestamp 付き backup を作る。
+```
+
+`SECRET_KEY_BASE` が未設定の場合、対話モードでは次を選べます。
+
+```text
+1. openssl rand -hex 64 で自動生成する
+2. 手入力する
+3. Rails credentials に任せて省略する
+```
+
+`RAILS_MASTER_KEY` は既存 Rails credentials の復号に必要なため、Infra 側で勝手に生成しません。
+
+secret 保護方針:
+
+```text
+config/local.env
+  非秘密情報だけ。secret は保存しない。
+
+/etc/mitsubachi/rails.env
+  secret の正式保存先。root:deploy 0640。
+
+stdout / stderr / deployments.log / journalctl
+  secret の値そのものを出さない。
+
+temporary file
+  secret を含む場合は mode 0600。処理後に削除する。
 ```
 
 初期構築:

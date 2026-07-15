@@ -3,6 +3,8 @@
 /rails.env
 /tmp/
 /log/
+/config/local.env
+/env/rails.env
 /vendor/bundle/
 /coverage/
 *.dump
