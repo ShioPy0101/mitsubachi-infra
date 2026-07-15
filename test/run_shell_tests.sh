@@ -60,7 +60,18 @@ fi
 grep -F "env HOME=\"\${home}\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy HOME is explicit"
 grep -F "RBENV_ROOT=\"\${home}/.rbenv\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy RBENV_ROOT is explicit"
 grep -F "PATH=\"\${home}/.rbenv/bin:\${home}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy PATH is explicit"
-grep -F 'sudo -u deploy env HOME=/home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap app repo clone uses deploy HOME"
+# shellcheck disable=SC2016
+grep -F 'bash -c '\''set -Eeuo pipefail; cd "$HOME"; "$@"'\'' bash "$@"' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy execution changes to deploy HOME"
+# shellcheck disable=SC2016
+grep -F 'bash -c '\''set -Eeuo pipefail; cd "$HOME"; "$@"'\'' bash "$@"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap deploy execution changes to deploy HOME"
+# shellcheck disable=SC2016
+grep -F 'run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" install "${RUBY_VERSION}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap ruby install runs through deploy HOME wrapper"
+if rg -n 'sudo -u deploy +(git|/home/deploy|env RBENV_ROOT)|sudo -u deploy git|sudo -u deploy /home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null 2>&1; then
+  fail "bootstrap must not run deploy git/rbenv commands directly from caller cwd"
+fi
+if rg -n '(chmod|chown|setfacl).*home/sio' "${ROOT}/scripts" >/dev/null 2>&1; then
+  fail "scripts must not loosen or take ownership of invoking user's home directory"
+fi
 grep -F 'check_repository_access()' "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install has invoking-user repository access check"
 grep -F "git ls-remote \"\${repository}\" HEAD" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install repository check uses git without sudo"
 if rg -n 'bootstrap_args=\(--app-repo|bootstrap_args\+=\(--app-repo' "${ROOT}/scripts/install_local.sh" >/dev/null 2>&1; then

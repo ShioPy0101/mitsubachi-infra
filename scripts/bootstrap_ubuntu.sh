@@ -30,6 +30,8 @@ INSTALL_SYSTEMD=false
 REMOVE_DEFAULT=false
 CREATE_DB=""
 CREATE_DB_ROLE=""
+DEPLOY_USER="deploy"
+DEPLOY_HOME=""
 
 while (($#)); do
   case "$1" in
@@ -48,6 +50,25 @@ done
 
 require_root
 require_command apt-get git curl install useradd usermod getent sudo
+
+resolve_deploy_home() {
+  DEPLOY_HOME="$(getent passwd "${DEPLOY_USER}" | cut -d: -f6)"
+  [[ -n "${DEPLOY_HOME}" ]] || die "${DEPLOY_USER} ユーザーの HOME を解決できません。useradd が失敗していないか確認してください。"
+}
+
+run_as_deploy_home() {
+  [[ -n "${DEPLOY_HOME}" ]] || resolve_deploy_home
+  log "running as ${DEPLOY_USER} from ${DEPLOY_HOME}: $*"
+  # sudo はユーザー切替だけに使い、実際の Git / rbenv / Ruby / Bundler は
+  # deploy の HOME と PATH で実行する。bash wrapper 内で cd "$HOME" してから
+  # 引数配列をそのまま実行することで、呼び出し元が /home/sio など deploy から
+  # 読めない作業ディレクトリにいても ruby-build の pushd/popd が壊れない。
+  sudo -u "${DEPLOY_USER}" -H \
+    env HOME="${DEPLOY_HOME}" \
+        RBENV_ROOT="${DEPLOY_HOME}/.rbenv" \
+        PATH="${DEPLOY_HOME}/.rbenv/bin:${DEPLOY_HOME}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin" \
+    bash -c 'set -Eeuo pipefail; cd "$HOME"; "$@"' bash "$@"
+}
 
 if [[ "${REMOVE_DEFAULT}" == true && "${INSTALL_NGINX}" != true ]]; then
   die "--remove-default-site requires --install-nginx-config"
@@ -71,6 +92,7 @@ fi
 if ! id deploy >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash --user-group deploy
 fi
+resolve_deploy_home
 usermod -aG mitsubachi-files deploy
 usermod -aG mitsubachi-files www-data
 
@@ -114,9 +136,9 @@ if [[ -n "${APP_REPO}" && ( -z "${RUBY_VERSION}" || -z "${BUNDLER_VERSION}" ) ]]
   chown deploy:deploy "${tmp_repo}"
   # Rails repository may be private.  Version discovery must therefore use the
   # same deploy user's SSH configuration as real deployments, never root's
-  # /root/.ssh created by sudo execution.
-  if sudo -u deploy env HOME=/home/deploy \
-    git clone --depth 1 -- "${APP_REPO}" "${tmp_repo}"; then
+  # /root/.ssh created by sudo execution.  The helper also moves into deploy's
+  # HOME before running git so root's or the invoking user's cwd cannot leak in.
+  if run_as_deploy_home git clone --depth 1 -- "${APP_REPO}" "${tmp_repo}"; then
     if [[ -z "${RUBY_VERSION}" && -f "${tmp_repo}/.ruby-version" ]]; then
       RUBY_VERSION="$(tr -d '[:space:]' < "${tmp_repo}/.ruby-version")"
     fi
@@ -124,7 +146,7 @@ if [[ -n "${APP_REPO}" && ( -z "${RUBY_VERSION}" || -z "${BUNDLER_VERSION}" ) ]]
       BUNDLER_VERSION="$(awk '/^BUNDLED WITH$/ {getline; gsub(/^[[:space:]]+/, "", $0); print; exit}' "${tmp_repo}/Gemfile.lock")"
     fi
   else
-    log "任意の Ruby/Bundler version discovery に失敗しました。APP_REPO=${APP_REPO} user=deploy HOME=/home/deploy SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-未設定}。通常ユーザーで ssh -T git@github.com と git ls-remote を確認してください。既定 version で続行します。"
+    log "任意の Ruby/Bundler version discovery に失敗しました。APP_REPO=${APP_REPO} user=${DEPLOY_USER} HOME=${DEPLOY_HOME} SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-未設定}。通常ユーザーで ssh -T git@github.com と git ls-remote を確認してください。既定 version で続行します。"
   fi
 fi
 RUBY_VERSION="${RUBY_VERSION:-3.3.6}"
@@ -132,25 +154,22 @@ BUNDLER_VERSION="${BUNDLER_VERSION:-}"
 
 set_stage "rbenv"
 log "deploy ユーザーの home に rbenv / ruby-build / Bundler を構築します。systemd は .bashrc に依存しません。"
-if [[ ! -d /home/deploy/.rbenv ]]; then
-  sudo -u deploy git clone https://github.com/rbenv/rbenv.git /home/deploy/.rbenv
+if [[ ! -d "${DEPLOY_HOME}/.rbenv" ]]; then
+  run_as_deploy_home git clone https://github.com/rbenv/rbenv.git "${DEPLOY_HOME}/.rbenv"
 fi
-if [[ ! -d /home/deploy/.rbenv/plugins/ruby-build ]]; then
-  sudo -u deploy git clone https://github.com/rbenv/ruby-build.git /home/deploy/.rbenv/plugins/ruby-build
+if [[ ! -d "${DEPLOY_HOME}/.rbenv/plugins/ruby-build" ]]; then
+  run_as_deploy_home git clone https://github.com/rbenv/ruby-build.git "${DEPLOY_HOME}/.rbenv/plugins/ruby-build"
 fi
-if ! sudo -u deploy /home/deploy/.rbenv/bin/rbenv versions --bare | grep -Fx -- "${RUBY_VERSION}" >/dev/null; then
-  sudo -u deploy env RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/bin:/usr/bin:/bin \
-    /home/deploy/.rbenv/bin/rbenv install "${RUBY_VERSION}"
+if ! run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" versions --bare | grep -Fx -- "${RUBY_VERSION}" >/dev/null; then
+  run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" install "${RUBY_VERSION}"
 fi
-sudo -u deploy /home/deploy/.rbenv/bin/rbenv global "${RUBY_VERSION}"
+run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" global "${RUBY_VERSION}"
 if [[ -n "${BUNDLER_VERSION}" ]]; then
-  sudo -u deploy env RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/shims:/home/deploy/.rbenv/bin:/usr/bin:/bin \
-    gem install bundler -v "${BUNDLER_VERSION}"
+  run_as_deploy_home gem install bundler -v "${BUNDLER_VERSION}"
 else
-  sudo -u deploy env RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/shims:/home/deploy/.rbenv/bin:/usr/bin:/bin \
-    gem install bundler
+  run_as_deploy_home gem install bundler
 fi
-sudo -u deploy /home/deploy/.rbenv/bin/rbenv rehash
+run_as_deploy_home "${DEPLOY_HOME}/.rbenv/bin/rbenv" rehash
 
 set_stage "postgres optional create"
 log "PostgreSQL role/database は明示指定された場合だけ冪等に作成します。既存 DB は削除しません。"

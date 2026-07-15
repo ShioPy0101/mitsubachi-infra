@@ -89,12 +89,17 @@ run_as_deploy() {
   local home="$2"
   shift 2
   [[ -n "${home}" ]] || die "deploy ユーザー ${user} の HOME が解決できません。"
-  log "running as ${user}: $*"
-  sudo -u "${user}" \
+  log "running as ${user} from ${home}: $*"
+  # deploy_api.sh や非対話の Ruby/Bundler 確認は deploy ユーザーとして
+  # 実行するが、呼び出し元の cwd が /home/sio など deploy から読めない
+  # 場所だと、内部で起動される rbenv/ruby-build が戻り先を失う。ここで
+  # deploy HOME へ移動してから引数配列を実行し、sudo による HOME/PATH の
+  # 破壊と cwd 継承を同時に避ける。
+  sudo -u "${user}" -H \
     env HOME="${home}" \
         RBENV_ROOT="${home}/.rbenv" \
         PATH="${home}/.rbenv/bin:${home}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin" \
-    "$@"
+    bash -c 'set -Eeuo pipefail; cd "$HOME"; "$@"' bash "$@"
 }
 
 check_repository_access() {
