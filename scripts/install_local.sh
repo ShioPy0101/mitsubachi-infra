@@ -24,6 +24,7 @@ Options:
   --rails-repo-url URL           Rails API deploy source. Default: git@github.com:ShioPy0101/mitsubachi-ruby.git.
   --rails-ref REF                Rails ref to deploy. Default: main.
   --deploy-user USER             Rails service user. Default: deploy.
+  --deploy-group GROUP           Rails service group. Default: deploy.
   --postgres-role ROLE           PostgreSQL role name used when composing DATABASE_URL interactively.
   --postgres-database NAME       PostgreSQL database name used when composing DATABASE_URL interactively.
   --keep-releases N              Release retention count. Default: 5.
@@ -128,6 +129,7 @@ while (($#)); do
     --rails-repo-url) set_cli_value RAILS_REPO_URL "${2:-}"; shift 2 ;;
     --rails-ref) set_cli_value RAILS_REF "${2:-}"; shift 2 ;;
     --deploy-user) set_cli_value DEPLOY_USER "${2:-}"; shift 2 ;;
+    --deploy-group) set_cli_value DEPLOY_GROUP "${2:-}"; shift 2 ;;
     --postgres-role) set_cli_value POSTGRES_ROLE "${2:-}"; shift 2 ;;
     --postgres-database) set_cli_value POSTGRES_DATABASE "${2:-}"; shift 2 ;;
     --keep-releases) set_cli_value KEEP_RELEASES "${2:-}"; shift 2 ;;
@@ -412,6 +414,7 @@ resolve_key LAN_CIDR "192.168.1.0/24"
 resolve_key RAILS_REPO_URL "git@github.com:ShioPy0101/mitsubachi-ruby.git"
 resolve_key RAILS_REF "main"
 resolve_key DEPLOY_USER "deploy"
+resolve_key DEPLOY_GROUP "deploy"
 resolve_key POSTGRES_ROLE "mitsubachi"
 resolve_key POSTGRES_DATABASE "mitsubachi_production"
 resolve_key KEEP_RELEASES "5"
@@ -479,7 +482,7 @@ set_derived_default APP_HOST "${server_ip_for_derived}"
 set_derived_default FRONTEND_ORIGIN "http://${server_ip_for_derived}"
 set_derived_default FRONTEND_URL "http://${server_ip_for_derived}"
 
-required_keys=(SERVER_IP LAN_CIDR RAILS_REPO_URL RAILS_REF DEPLOY_USER POSTGRES_ROLE POSTGRES_DATABASE KEEP_RELEASES ENABLE_UFW ALLOW_SSH REMOVE_NGINX_DEFAULT_SITE RAILS_MASTER_KEY DATABASE_URL APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE)
+required_keys=(SERVER_IP LAN_CIDR RAILS_REPO_URL RAILS_REF DEPLOY_USER DEPLOY_GROUP POSTGRES_ROLE POSTGRES_DATABASE KEEP_RELEASES ENABLE_UFW ALLOW_SSH REMOVE_NGINX_DEFAULT_SITE RAILS_MASTER_KEY DATABASE_URL APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE)
 for key in "${required_keys[@]}"; do
   if [[ -z "${values[${key}]:-}" ]]; then
     die "${key} が不足しています。--interactive で入力するか、--config / --rails-env-file / 明示引数で指定してください。"
@@ -494,6 +497,7 @@ lan_cidr="$(require_value LAN_CIDR "LAN_CIDR が不足しています。")"
 rails_repo_url="$(require_value RAILS_REPO_URL "RAILS_REPO_URL が不足しています。")"
 rails_ref="$(require_value RAILS_REF "RAILS_REF が不足しています。")"
 deploy_user="$(require_value DEPLOY_USER "DEPLOY_USER が不足しています。")"
+deploy_group="$(require_value DEPLOY_GROUP "DEPLOY_GROUP が不足しています。")"
 postgres_role="$(require_value POSTGRES_ROLE "POSTGRES_ROLE が不足しています。")"
 postgres_database="$(require_value POSTGRES_DATABASE "POSTGRES_DATABASE が不足しています。")"
 keep_releases="$(require_value KEEP_RELEASES "KEEP_RELEASES が不足しています。")"
@@ -504,6 +508,7 @@ enable_ufw="$(require_value ENABLE_UFW "ENABLE_UFW が不足しています。")
 allow_ssh="$(require_value ALLOW_SSH "ALLOW_SSH が不足しています。")"
 
 [[ "${deploy_user}" == "deploy" ]] || die "現在の systemd/bootstrap 設計では DEPLOY_USER=deploy のみ対応しています。指定値=${deploy_user}"
+[[ "${deploy_group}" == "deploy" ]] || die "現在の systemd/bootstrap 設計では DEPLOY_GROUP=deploy のみ対応しています。指定値=${deploy_group}"
 private_ipv4 "${server_ip}" || die "SERVER_IP は private IPv4 である必要があります。"
 cidr_contains_ipv4 "${lan_cidr}" "${server_ip}" || die "SERVER_IP は LAN_CIDR 内である必要があります。"
 [[ "${lan_cidr}" != "0.0.0.0/0" ]] || die "LAN_CIDR に 0.0.0.0/0 は指定できません。"
@@ -532,6 +537,7 @@ validate_derived_default FRONTEND_URL "http://${server_ip}"
 log "invoking user: ${INVOKING_USER}"
 log "invoking home: ${INVOKING_HOME}"
 log "deploy user: ${deploy_user}"
+log "deploy group: ${deploy_group}"
 if [[ "${DRY_RUN}" != true ]]; then
   log "checking sudo credentials for root-only installation steps"
   sudo -v || die "sudo を利用できないため停止します。apt、/etc、/var、/mnt、systemd、Nginx、UFW の設定に sudo が必要です。"
@@ -560,6 +566,7 @@ LAN CIDR:           ${lan_cidr}
 Rails repository:   ${rails_repo_url}
 Rails ref:          ${rails_ref}
 Deploy user:        ${deploy_user}
+Deploy group:       ${deploy_group}
 App root:           /var/www/mitsubachi
 Storage root:       ${file_storage_root}
 Bulk ZIP tmp:       ${bulk_download_tmp}
@@ -602,6 +609,7 @@ write_config_file() {
     printf 'RAILS_REPO_URL=%s\n' "${rails_repo_url}"
     printf 'RAILS_REF=%s\n' "${rails_ref}"
     printf 'DEPLOY_USER=%s\n' "${deploy_user}"
+    printf 'DEPLOY_GROUP=%s\n' "${deploy_group}"
     printf 'POSTGRES_ROLE=%s\n' "${postgres_role}"
     printf 'POSTGRES_DATABASE=%s\n' "${postgres_database}"
     printf 'KEEP_RELEASES=%s\n' "${keep_releases}"
@@ -666,7 +674,37 @@ install_rails_env_file() {
   rm -f -- "${tmp}"
 }
 
+ensure_deploy_account() {
+  if ! getent group "${deploy_group}" >/dev/null; then
+    log "creating deploy group before owner/group dependent files: ${deploy_group}"
+    sudo_cmd groupadd --system "${deploy_group}" || die "deploy group could not be created: ${deploy_group}"
+  else
+    log "deploy group already exists: ${deploy_group}"
+  fi
+
+  if ! id "${deploy_user}" >/dev/null 2>&1; then
+    log "creating deploy user before owner/group dependent files: ${deploy_user}"
+    sudo_cmd useradd \
+      --system \
+      --gid "${deploy_group}" \
+      --create-home \
+      --home-dir "/home/${deploy_user}" \
+      --shell /bin/bash \
+      "${deploy_user}" || die "deploy user could not be created: ${deploy_user}"
+  else
+    log "deploy user already exists: ${deploy_user}"
+  fi
+
+  getent group "${deploy_group}" >/dev/null || die "deploy group could not be created: ${deploy_group}"
+  id "${deploy_user}" >/dev/null 2>&1 || die "deploy user could not be created: ${deploy_user}"
+}
+
 if [[ "${DRY_RUN}" == true ]]; then
+  log "[DRY-RUN] create system group if missing: ${deploy_group}"
+  log "[DRY-RUN] create system user if missing: ${deploy_user}"
+  log "[DRY-RUN] create directory: /etc/mitsubachi owner=root group=${deploy_group} mode=0750"
+  log "[DRY-RUN] install rails env: ${RAILS_ENV_DEST} owner=root group=${deploy_group} mode=0640"
+  log "[DRY-RUN] run bootstrap_ubuntu.sh as root before rails.env placement"
   log "dry-run のため、設定ファイル作成、bootstrap、LAN 設定、deploy は実行しません。"
   exit 0
 fi
@@ -676,6 +714,8 @@ require_command install
 if [[ "${write_non_secret_config}" == true ]]; then
   write_config_file "${CONFIG_FILE}"
 fi
+
+ensure_deploy_account
 
 if [[ -f "${RAILS_ENV_DEST}" && "${OVERWRITE_RAILS_ENV}" != true ]]; then
   log "既存 rails.env を保持し、不足キーだけ追加します。既存値の変更には --update-rails-env または --update-secrets が必要です。"

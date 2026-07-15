@@ -61,6 +61,11 @@ grep -F "env HOME=\"\${home}\"" "${ROOT}/scripts/install_local.sh" >/dev/null ||
 grep -F "RBENV_ROOT=\"\${home}/.rbenv\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy RBENV_ROOT is explicit"
 grep -F "PATH=\"\${home}/.rbenv/bin:\${home}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy PATH is explicit"
 grep -F 'sudo -u deploy env HOME=/home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap app repo clone uses deploy HOME"
+ensure_line="$(rg -n '^ensure_deploy_account$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
+env_line="$(rg -n '^install_rails_env_file$' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
+bootstrap_line="$(rg -n 'sudo_cmd "\$\{SCRIPT_DIR\}/bootstrap_ubuntu.sh"' "${ROOT}/scripts/install_local.sh" | cut -d: -f1 | tail -n1)"
+[[ -n "${ensure_line}" && -n "${env_line}" && -n "${bootstrap_line}" ]] || fail "install phase order markers exist"
+(( ensure_line < env_line && env_line < bootstrap_line )) || fail "install phase order must be account, rails.env, bootstrap"
 pass "install sudo/user boundary static checks"
 
 tmpdir="$(mktemp -d)"
@@ -81,6 +86,7 @@ LAN_CIDR=192.168.1.0/24
 RAILS_REPO_URL=git@github.com:ShioPy0101/mitsubachi-ruby.git
 RAILS_REF=main
 DEPLOY_USER=deploy
+DEPLOY_GROUP=deploy
 POSTGRES_ROLE=mitsubachi
 POSTGRES_DATABASE=mitsubachi_production
 KEEP_RELEASES=5
@@ -95,6 +101,7 @@ cat > "${install_config_without_network}" <<'CONFIG'
 RAILS_REPO_URL=git@github.com:ShioPy0101/mitsubachi-ruby.git
 RAILS_REF=main
 DEPLOY_USER=deploy
+DEPLOY_GROUP=deploy
 POSTGRES_ROLE=mitsubachi
 POSTGRES_DATABASE=mitsubachi_production
 KEEP_RELEASES=5
@@ -146,10 +153,24 @@ run_expect_success "install dry-run non-interactive" bash "${ROOT}/scripts/insta
   --non-interactive \
   --yes \
   --dry-run
+grep -F '[DRY-RUN] create system group if missing: deploy' /tmp/mitsubachi-test.err >/dev/null || fail "dry-run shows deploy group creation"
+grep -F '[DRY-RUN] create system user if missing: deploy' /tmp/mitsubachi-test.err >/dev/null || fail "dry-run shows deploy user creation"
+grep -F '[DRY-RUN] create directory: /etc/mitsubachi owner=root group=deploy mode=0750' /tmp/mitsubachi-test.err >/dev/null || fail "dry-run shows etc directory after account"
 if rg -n 'test-master-key-placeholder|test-secret-key-base-placeholder|test-password-placeholder' /tmp/mitsubachi-test.out /tmp/mitsubachi-test.err >/dev/null 2>&1; then
   fail "install dry-run leaked secret"
 fi
 pass "install dry-run redacts secrets"
+
+run_expect_failure "install rejects unsupported non-default deploy account" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config_empty}" \
+  --rails-env-file "${install_rails_env_min}" \
+  --deploy-user appuser \
+  --deploy-group appgroup \
+  --non-interactive \
+  --yes \
+  --dry-run
+rg -n 'DEPLOY_USER=deploy|DEPLOY_GROUP=deploy' /tmp/mitsubachi-test.err >/dev/null || fail "non-default deploy account has explicit error"
+pass "install non-default deploy account fails explicitly"
 
 run_expect_success "install defaults all host values from default SERVER_IP" bash "${ROOT}/scripts/install_local.sh" \
   --config "${install_config_empty}" \
