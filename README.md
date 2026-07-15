@@ -89,7 +89,9 @@ browser
 
 Rails/Puma の `127.0.0.1:3001` と PostgreSQL の `5432` は LAN に公開しません。LAN client から見える入口は Nginx の `:80` だけです。
 
-## ディレクトリ設計
+## 正式なディレクトリ設計
+
+この節のパスを正式な設計として採用します。README、シェルスクリプト、Nginx 設定、systemd unit、環境変数雛形、テストはこの構成に揃えています。
 
 ```text
 /var/www/mitsubachi
@@ -100,6 +102,35 @@ Rails/Puma の `127.0.0.1:3001` と PostgreSQL の `5432` は LAN に公開し�
     ├── log
     ├── tmp
     └── deployments.log
+```
+
+各ディレクトリの責務:
+
+```text
+/var/www/mitsubachi/repo
+  mitsubachi-ruby の Git リポジトリキャッシュ。
+  deploy_api.sh が clone または fetch に使用する。
+  実行中アプリケーションの作業ツリーとして直接使用しない。
+
+/var/www/mitsubachi/releases
+  commit SHA から作成した release を保存する。
+  各 release は独立したディレクトリとする。
+
+/var/www/mitsubachi/current
+  現在稼働中の release を指す symlink。
+  releases/<release-name> へ atomic に切り替える。
+
+/var/www/mitsubachi/shared/log
+  release 間で共有する Rails log 領域。
+
+/var/www/mitsubachi/shared/tmp
+  release 間で共有する Rails 通常 tmp 領域。
+  外付け HDD 上の bulk download 用一時 ZIP 領域とは別物。
+
+/var/www/mitsubachi/shared/deployments.log
+  deploy / rollback の履歴を記録する。
+  commit SHA、release 名、実行日時、結果を記録する。
+  秘密情報は記録しない。
 ```
 
 外付け HDD:
@@ -115,7 +146,38 @@ Rails/Puma の `127.0.0.1:3001` と PostgreSQL の `5432` は LAN に公開し�
     └── storage/
 ```
 
-`/srv/mitsubachi` は使いません。PostgreSQL のデータディレクトリ本体は Ubuntu 標準構成の内蔵ディスク上に維持し、backup 成果物だけを外付け HDD に保存します。
+各ディレクトリの責務:
+
+```text
+/mnt/external-hdd/mitsubachi/files
+  Rails の FILE_STORAGE_ROOT。
+
+/mnt/external-hdd/mitsubachi/files/drive_items
+  DriveItem の物理ファイル保存先。
+  実ファイルは storage_key をファイル名として保存する。
+
+/mnt/external-hdd/mitsubachi/tmp/bulk_downloads
+  一括 download 用 ZIP の一時作成先。
+  Rails の通常 tmp 領域とは分離する。
+
+/mnt/external-hdd/mitsubachi/backups/postgres
+  pg_dump による PostgreSQL backup 成果物の保存先。
+
+/mnt/external-hdd/mitsubachi/backups/storage
+  file storage backup 成果物の保存先。
+```
+
+使用禁止パス:
+
+```text
+/srv/mitsubachi
+/srv/mitsubachi/files
+/srv/mitsubachi/tmp
+/srv/mitsubachi/backups
+/var/www/mitsubachi-ruby
+```
+
+これらは過去設計や別案としても使いません。PostgreSQL のデータディレクトリ本体は Ubuntu 標準構成の内蔵ディスク上に維持し、backup 成果物だけを外付け HDD に保存します。PostgreSQL cluster を `/mnt/external-hdd` 上へ作成したり、PostgreSQL 本体の起動を外付け HDD 上の data directory へ依存させたりしません。
 
 ## 権限設計
 
@@ -171,6 +233,18 @@ UUID=<your-external-hdd-uuid> /mnt/external-hdd ext4 defaults,nofail,x-systemd.d
 ```
 
 `nofail` を使う場合でも、Rails service は `RequiresMountsFor=/mnt/external-hdd/mitsubachi/files` と `ExecStartPre=/usr/bin/mountpoint -q /mnt/external-hdd` で mount を必須にします。boot は継続できても、HDD がない状態で Rails は起動しません。
+
+systemd unit の起動前検査:
+
+```text
+/mnt/external-hdd が mount point である
+/mnt/external-hdd/mitsubachi/files が書き込み可能である
+/mnt/external-hdd/mitsubachi/files/drive_items が存在する
+deploy ユーザーが files / drive_items へ書き込める
+mktemp により filesystem が read-only ではないことを確認する
+```
+
+`www-data` の読み取り可否と書き込み不可は `verify_installation.sh` で確認します。systemd service は `User=deploy` で実行されるため、Nginx worker user の権限確認は破壊的変更をしない verify 側へ分離しています。
 
 mount:
 
@@ -320,6 +394,10 @@ FRONTEND_ORIGIN / FRONTEND_URL
 FILE_STORAGE_ROOT
   /mnt/external-hdd/mitsubachi/files
 
+BULK_DOWNLOAD_TMP
+  /mnt/external-hdd/mitsubachi/tmp/bulk_downloads
+  Rails の通常 tmp とは分離した一括 download ZIP 作成先。
+
 SESSION_COOKIE_SECURE
   LAN HTTP 検証では false を指定する。ただし Rails 側がこの環境変数を
   実際に参照しているとは限らない。
@@ -386,16 +464,17 @@ sudo -u deploy ./scripts/deploy_api.sh --ref <branch-or-tag-or-sha>
 4. Rails repo clone/fetch
 5. ref を commit SHA に固定
 6. releases/<UTC timestamp>-<short sha> を作成
-7. bundle install
-8. shared log/tmp symlink
-9. production boot check
-10. DB 接続確認
-11. rails db:migrate
-12. current symlink atomic switch
-13. systemd restart
-14. ready health check
-15. 古い release cleanup
-16. deployments.log 追記
+7. commit SHA を release directory へ checkout
+8. bundle install
+9. shared log/tmp symlink
+10. production boot check
+11. DB 接続確認
+12. rails db:migrate
+13. current symlink atomic switch
+14. systemd restart
+15. ready health check
+16. 古い release cleanup
+17. deployments.log 追記
 ```
 
 current 切り替え前の失敗は現行 release に影響しません。current 切り替え後に health check が失敗した場合は直前 release へ symlink を戻し、service restart と health check を再試行します。ただし DB migration の自動 down は行いません。migration は後方互換を保つ設計が必要です。
@@ -562,6 +641,8 @@ sudo systemctl start mitsubachi-api
 ```
 
 重要: storage backup の source と destination は同じ外付け HDD 上です。これは誤削除や論理破損への補助であり、外付け HDD 自体の故障には耐えません。物理ディスク故障に備えるには、別ディスク、NAS、filesystem snapshot、rsync hard-link backup、または offsite backup へ移行してください。
+
+storage backup の対象は `/mnt/external-hdd/mitsubachi/files` のみに限定します。`/mnt/external-hdd/mitsubachi` 全体を対象にすると、`backups` ディレクトリを再帰的に archive へ含める危険があります。
 
 upload 中の完全な snapshot consistency は保証しません。厳密な同一時点性が必要な場合は、maintenance window、filesystem snapshot、DB と storage の世代 marker などを検討してください。
 

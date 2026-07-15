@@ -73,4 +73,17 @@ if cidr_contains_ipv4 "192.168.2.0/24" "192.168.1.50"; then
 fi
 pass "CIDR validation"
 
+grep -F 'WorkingDirectory=/var/www/mitsubachi/current' "${ROOT}/systemd/mitsubachi-api.service" >/dev/null || fail "systemd WorkingDirectory"
+grep -F 'RequiresMountsFor=/mnt/external-hdd/mitsubachi/files' "${ROOT}/systemd/mitsubachi-api.service" >/dev/null || fail "systemd RequiresMountsFor"
+grep -F 'FILE_STORAGE_ROOT=/mnt/external-hdd/mitsubachi/files' "${ROOT}/env/rails.env.example" >/dev/null || fail "env FILE_STORAGE_ROOT"
+grep -F 'BULK_DOWNLOAD_TMP=/mnt/external-hdd/mitsubachi/tmp/bulk_downloads' "${ROOT}/env/rails.env.example" >/dev/null || fail "env BULK_DOWNLOAD_TMP"
+grep -F 'alias /mnt/external-hdd/mitsubachi/files/drive_items/;' "${ROOT}/nginx/mitsubachi-local.conf" >/dev/null || fail "nginx alias"
+grep -F 'location /internal/storage/drive_items/' "${ROOT}/nginx/mitsubachi-local.conf" >/dev/null || fail "nginx internal URI"
+grep -F "POSTGRES_BACKUP_DIR=\"\${POSTGRES_BACKUP_DIR:-\${MITSUBACHI_HDD_ROOT}/backups/postgres}\"" "${ROOT}/scripts/lib/common.sh" >/dev/null || fail "postgres backup path"
+grep -F "STORAGE_BACKUP_DIR=\"\${STORAGE_BACKUP_DIR:-\${MITSUBACHI_HDD_ROOT}/backups/storage}\"" "${ROOT}/scripts/lib/common.sh" >/dev/null || fail "storage backup path"
+if rg -n '/srv/mitsubachi|/var/www/mitsubachi-ruby' "${ROOT}/env" "${ROOT}/nginx" "${ROOT}/systemd" "${ROOT}/scripts" >/tmp/mitsubachi-test.out 2>/tmp/mitsubachi-test.err; then
+  fail "forbidden runtime path in executable configuration"
+fi
+pass "static path consistency"
+
 printf 'All shell tests passed.\n'

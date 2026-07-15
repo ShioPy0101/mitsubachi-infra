@@ -98,7 +98,10 @@ validate_safe_basename "${release_name}"
 tmp_release="${RELEASE_ROOT}/${release_name}"
 [[ ! -e "${tmp_release}" ]] || die "release already exists: ${tmp_release}"
 mkdir -p -- "${tmp_release}"
-git -C "${REPO_CACHE}" archive "${COMMIT_SHA}" | tar -x -C "${tmp_release}"
+# repo cache は mirror として保持し、実行中アプリケーションの作業ツリーにはしない。
+# release directory へ commit SHA を直接 checkout することで、deploy 対象が
+# ref の移動に影響されず、後から deployments.log の SHA と実ファイルを追跡できる。
+git --git-dir="${REPO_CACHE}" --work-tree="${tmp_release}" checkout -f "${COMMIT_SHA}" -- .
 log "release directory を作成しました: ${release_name}"
 
 set_stage "ruby and bundler"

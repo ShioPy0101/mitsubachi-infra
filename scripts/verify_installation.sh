@@ -110,6 +110,13 @@ if [[ -f "${RAILS_ENV_FILE}" ]]; then
 else
   fail "rails env file が存在する"
 fi
+if [[ -f "${RAILS_ENV_FILE}" ]]; then
+  if grep -F 'FILE_STORAGE_ROOT=/mnt/external-hdd/mitsubachi/files' "${RAILS_ENV_FILE}" >/dev/null; then
+    pass "rails env FILE_STORAGE_ROOT は正式パス"
+  else
+    warn "rails env FILE_STORAGE_ROOT が正式パスと一致しません。/mnt/external-hdd/mitsubachi/files を確認してください。"
+  fi
+fi
 
 set_stage "release and systemd"
 if [[ -L "${CURRENT_LINK}" ]]; then pass "current symlink が存在する"; else warn "初回 deploy 前のため current symlink がありません。"; fi
@@ -150,6 +157,22 @@ if [[ -f "${REPO_ROOT}/nginx/mitsubachi-local.conf" ]]; then
 fi
 if [[ -f "${REPO_ROOT}/systemd/mitsubachi-api.service" ]]; then
   if grep -F 'WorkingDirectory=/var/www/mitsubachi/current' "${REPO_ROOT}/systemd/mitsubachi-api.service" >/dev/null; then pass "systemd WorkingDirectory は current symlink と一致"; else fail "systemd WorkingDirectory は current symlink と一致"; fi
+  if grep -F 'RequiresMountsFor=/mnt/external-hdd/mitsubachi/files' "${REPO_ROOT}/systemd/mitsubachi-api.service" >/dev/null; then pass "systemd RequiresMountsFor は外付け HDD files"; else fail "systemd RequiresMountsFor は外付け HDD files"; fi
+fi
+if grep -F "CURRENT_LINK=\"\${CURRENT_LINK:-\${APP_ROOT}/current}\"" "${REPO_ROOT}/scripts/lib/common.sh" >/dev/null; then
+  pass "deploy/rollback 共通 current path は /var/www/mitsubachi/current"
+else
+  fail "deploy/rollback 共通 current path は /var/www/mitsubachi/current"
+fi
+if grep -F "POSTGRES_BACKUP_DIR=\"\${POSTGRES_BACKUP_DIR:-\${MITSUBACHI_HDD_ROOT}/backups/postgres}\"" "${REPO_ROOT}/scripts/lib/common.sh" >/dev/null; then
+  pass "PostgreSQL backup path は正式パス"
+else
+  fail "PostgreSQL backup path は正式パス"
+fi
+if grep -F "STORAGE_BACKUP_DIR=\"\${STORAGE_BACKUP_DIR:-\${MITSUBACHI_HDD_ROOT}/backups/storage}\"" "${REPO_ROOT}/scripts/lib/common.sh" >/dev/null; then
+  pass "storage backup path は正式パス"
+else
+  fail "storage backup path は正式パス"
 fi
 if command -v ufw >/dev/null 2>&1; then
   ufw status verbose || true
