@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/common.sh
+# shellcheck source=scripts/lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
 usage() {
@@ -45,7 +45,9 @@ require_not_root
 require_command git ruby bundle curl flock awk sed find sort tail xargs
 [[ -n "${RAILS_REPO_URL}" ]] || die "--repo-url must not be empty"
 [[ -n "${REF}" ]] || die "--ref must not be empty"
-[[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] && (( KEEP_RELEASES >= 1 )) || die "--keep-releases must be a positive integer"
+if ! [[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] || (( KEEP_RELEASES < 1 )); then
+  die "--keep-releases must be a positive integer"
+fi
 
 with_lock "deploy-api"
 

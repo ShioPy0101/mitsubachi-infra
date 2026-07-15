@@ -67,7 +67,8 @@ require_command() {
 backup_if_exists() {
   local path="$1"
   if [[ -e "${path}" || -L "${path}" ]]; then
-    local backup="${path}.bak.$(date -u '+%Y%m%dT%H%M%SZ')"
+    local backup
+    backup="${path}.bak.$(date -u '+%Y%m%dT%H%M%SZ')"
     cp -a -- "${path}" "${backup}"
     log "既存設定を退避しました: ${path} -> ${backup}"
   fi
