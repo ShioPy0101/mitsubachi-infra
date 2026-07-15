@@ -344,7 +344,16 @@ PROMPT
 
 url_encode() {
   local value="$1"
-  VALUE_TO_ENCODE="${value}" ruby -rcgi -e 'print CGI.escape(ENV.fetch("VALUE_TO_ENCODE"))'
+  local i char encoded=""
+  LC_CTYPE=C
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    case "${char}" in
+      [a-zA-Z0-9.~_-]) encoded+="${char}" ;;
+      *) printf -v encoded '%s%%%02X' "${encoded}" "'${char}" ;;
+    esac
+  done
+  printf '%s\n' "${encoded}"
 }
 
 prompt_database_url() {
@@ -400,20 +409,6 @@ set_default RAILS_MAX_THREADS "5"
 set_default WEB_CONCURRENCY "1"
 set_default PORT "3001"
 
-server_ip_for_defaults="$(require_value SERVER_IP "SERVER_IP が不足しています。")"
-if [[ -z "${values[APP_HOST]:-}" ]]; then
-  values[APP_HOST]="${server_ip_for_defaults}"
-  sources[APP_HOST]="default from SERVER_IP"
-fi
-if [[ -z "${values[FRONTEND_ORIGIN]:-}" ]]; then
-  values[FRONTEND_ORIGIN]="http://${server_ip_for_defaults}"
-  sources[FRONTEND_ORIGIN]="default from SERVER_IP"
-fi
-if [[ -z "${values[FRONTEND_URL]:-}" ]]; then
-  values[FRONTEND_URL]="http://${server_ip_for_defaults}"
-  sources[FRONTEND_URL]="default from SERVER_IP"
-fi
-
 if [[ "${interactive_enabled}" == true ]]; then
   [[ "${sources[SERVER_IP]:-}" != "default" ]] || prompt_with_default SERVER_IP "Ubuntu server IP" "${values[SERVER_IP]:-192.168.1.50}"
   [[ "${sources[LAN_CIDR]:-}" != "default" ]] || prompt_with_default LAN_CIDR "LAN CIDR" "${values[LAN_CIDR]:-192.168.1.0/24}"
@@ -430,6 +425,28 @@ if [[ "${interactive_enabled}" == true ]]; then
   [[ -n "${values[DATABASE_URL]:-}" ]] || prompt_database_url
   [[ "${sources[SESSION_COOKIE_SECURE]:-}" != "default" ]] || prompt_bool SESSION_COOKIE_SECURE "Use insecure HTTP session cookie for LAN testing? (false means LAN HTTP)" "${values[SESSION_COOKIE_SECURE]:-false}"
 fi
+
+is_explicit_derived_value() {
+  local key="$1"
+  local src="${sources[${key}]:-}"
+  local value="${values[${key}]:-}"
+  [[ -n "${value}" ]] || return 1
+  [[ "${src}" != "default" && "${src}" != "default from SERVER_IP" && -n "${src}" ]]
+}
+
+set_derived_default() {
+  local key="$1"
+  local value="$2"
+  if ! is_explicit_derived_value "${key}"; then
+    values["${key}"]="${value}"
+    sources["${key}"]="default from SERVER_IP"
+  fi
+}
+
+server_ip_for_derived="$(require_value SERVER_IP "SERVER_IP が不足しています。")"
+set_derived_default APP_HOST "${server_ip_for_derived}"
+set_derived_default FRONTEND_ORIGIN "http://${server_ip_for_derived}"
+set_derived_default FRONTEND_URL "http://${server_ip_for_derived}"
 
 required_keys=(SERVER_IP LAN_CIDR RAILS_REPO_URL RAILS_REF DEPLOY_USER POSTGRES_ROLE POSTGRES_DATABASE KEEP_RELEASES ENABLE_UFW ALLOW_SSH REMOVE_NGINX_DEFAULT_SITE RAILS_MASTER_KEY DATABASE_URL APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE)
 for key in "${required_keys[@]}"; do
@@ -467,6 +484,18 @@ fi
 if [[ "${enable_ufw}" == true && "${allow_ssh}" != true ]]; then
   die "ENABLE_UFW=true の場合は、SSH 締め出し防止のため ALLOW_SSH=true が必要です。"
 fi
+
+validate_derived_default() {
+  local key="$1"
+  local expected="$2"
+  if ! is_explicit_derived_value "${key}" && [[ "${values[${key}]:-}" != "${expected}" ]]; then
+    die "${key} は明示指定されていないため ${expected} である必要があります。現在値=${values[${key}]:-<empty>}"
+  fi
+}
+
+validate_derived_default APP_HOST "${server_ip}"
+validate_derived_default FRONTEND_ORIGIN "http://${server_ip}"
+validate_derived_default FRONTEND_URL "http://${server_ip}"
 
 for key in "${!values[@]}"; do
   print_source "${key}"

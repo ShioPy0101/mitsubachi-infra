@@ -58,6 +58,8 @@ cleanup() {
 trap cleanup EXIT
 
 install_config="${tmpdir}/local.env"
+install_config_empty="${tmpdir}/empty-local.env"
+install_config_without_network="${tmpdir}/local-without-network.env"
 install_rails_env="${tmpdir}/rails.env"
 install_rails_env_min="${tmpdir}/rails-min.env"
 install_rails_env_explicit="${tmpdir}/rails-explicit.env"
@@ -75,6 +77,20 @@ ALLOW_SSH=true
 REMOVE_NGINX_DEFAULT_SITE=false
 CONFIG
 chmod 0600 "${install_config}"
+touch "${install_config_empty}"
+chmod 0600 "${install_config_empty}"
+cat > "${install_config_without_network}" <<'CONFIG'
+RAILS_REPO_URL=git@github.com:ShioPy0101/mitsubachi-ruby.git
+RAILS_REF=main
+DEPLOY_USER=deploy
+POSTGRES_ROLE=mitsubachi
+POSTGRES_DATABASE=mitsubachi_production
+KEEP_RELEASES=5
+ENABLE_UFW=true
+ALLOW_SSH=true
+REMOVE_NGINX_DEFAULT_SITE=false
+CONFIG
+chmod 0600 "${install_config_without_network}"
 {
   printf '%s=%s\n' RAILS_ENV production
   printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
@@ -123,6 +139,18 @@ if rg -n 'test-master-key-placeholder|test-secret-key-base-placeholder|test-pass
 fi
 pass "install dry-run redacts secrets"
 
+run_expect_success "install defaults all host values from default SERVER_IP" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config_empty}" \
+  --rails-env-file "${install_rails_env_min}" \
+  --non-interactive \
+  --yes \
+  --dry-run
+grep -F 'Server IP:          192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "default SERVER_IP"
+grep -F 'App host:           192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "APP_HOST defaults from default SERVER_IP"
+grep -F 'Frontend origin:    http://192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN defaults from default SERVER_IP"
+grep -F 'Frontend URL:       http://192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL defaults from default SERVER_IP"
+pass "install default-only derived host values"
+
 run_expect_success "install defaults APP_HOST and frontend URLs" bash "${ROOT}/scripts/install_local.sh" \
   --config "${install_config}" \
   --rails-env-file "${install_rails_env_min}" \
@@ -133,6 +161,20 @@ grep -F 'App host:           192.168.1.50' /tmp/mitsubachi-test.out >/dev/null |
 grep -F 'Frontend origin:    http://192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN defaults to SERVER_IP"
 grep -F 'Frontend URL:       http://192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL defaults to SERVER_IP"
 pass "install default host values"
+
+run_expect_success "install CLI SERVER_IP updates derived host values" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config_empty}" \
+  --rails-env-file "${install_rails_env_min}" \
+  --server-ip 192.168.10.151 \
+  --lan-cidr 192.168.10.0/24 \
+  --non-interactive \
+  --yes \
+  --dry-run
+grep -F 'Server IP:          192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "CLI SERVER_IP shown"
+grep -F 'App host:           192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "APP_HOST derives from CLI SERVER_IP"
+grep -F 'Frontend origin:    http://192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN derives from CLI SERVER_IP"
+grep -F 'Frontend URL:       http://192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL derives from CLI SERVER_IP"
+pass "install CLI server derived host values"
 
 run_expect_success "install preserves explicit APP_HOST and frontend URLs" bash "${ROOT}/scripts/install_local.sh" \
   --config "${install_config}" \
@@ -151,6 +193,14 @@ if command -v script >/dev/null 2>&1; then
     fail "install interactive TTY dry-run used unbound variable error"
   fi
   pass "install interactive path avoids unbound variables"
+
+  printf '192.168.10.151\n192.168.10.0/24\n' > "${tmpdir}/interactive-network-input"
+  run_expect_success "install interactive SERVER_IP updates derived host values" bash -c "script -qfec \"bash '${ROOT}/scripts/install_local.sh' --config '${install_config_without_network}' --rails-env-file '${install_rails_env_min}' --interactive --yes --dry-run\" /dev/null < '${tmpdir}/interactive-network-input'"
+  grep -F 'Server IP:          192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "interactive SERVER_IP shown"
+  grep -F 'App host:           192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "APP_HOST derives from interactive SERVER_IP"
+  grep -F 'Frontend origin:    http://192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN derives from interactive SERVER_IP"
+  grep -F 'Frontend URL:       http://192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL derives from interactive SERVER_IP"
+  pass "install interactive server derived host values"
 fi
 
 run_expect_failure "install non-interactive missing secrets fails" bash "${ROOT}/scripts/install_local.sh" \
