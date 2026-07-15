@@ -204,7 +204,12 @@ set_default() {
 
 resolve_key() {
   local key="$1"
-  local default_value="${2-}"
+  local default_value=""
+  local has_default=false
+  if (($# >= 2)); then
+    default_value="$2"
+    has_default=true
+  fi
   if [[ -v "cli_values[${key}]" ]]; then
     values["${key}"]="${cli_values[${key}]}"
     sources["${key}"]="command line"
@@ -218,10 +223,19 @@ resolve_key() {
     else
       sources["${key}"]="${RAILS_ENV_DEST}"
     fi
-  elif [[ -n "${default_value}" ]]; then
+  elif [[ "${has_default}" == true ]]; then
     values["${key}"]="${default_value}"
     sources["${key}"]="default"
   fi
+}
+
+require_value() {
+  local key="$1"
+  local message="${2:-${key} が不足しています。}"
+  if [[ -z "${values[${key}]:-}" ]]; then
+    die "${message}"
+  fi
+  printf '%s\n' "${values[${key}]}"
 }
 
 print_source() {
@@ -340,11 +354,11 @@ prompt_database_url() {
   prompt_with_default POSTGRES_ROLE "PostgreSQL role" "${values[POSTGRES_ROLE]:-mitsubachi}"
   prompt_with_default POSTGRES_DATABASE "PostgreSQL database" "${values[POSTGRES_DATABASE]:-mitsubachi_production}"
   prompt_secret POSTGRES_PASSWORD "PostgreSQL password" true
-  host="${values[POSTGRES_HOST]}"
-  port="${values[POSTGRES_PORT]}"
-  role="${values[POSTGRES_ROLE]}"
-  db="${values[POSTGRES_DATABASE]}"
-  password="${values[POSTGRES_PASSWORD]}"
+  host="$(require_value POSTGRES_HOST "PostgreSQL host が不足しています。")"
+  port="$(require_value POSTGRES_PORT "PostgreSQL port が不足しています。")"
+  role="$(require_value POSTGRES_ROLE "PostgreSQL role が不足しています。")"
+  db="$(require_value POSTGRES_DATABASE "PostgreSQL database が不足しています。")"
+  password="$(require_value POSTGRES_PASSWORD "PostgreSQL password が不足しています。")"
   encoded_user="$(url_encode "${role}")"
   encoded_password="$(url_encode "${password}")"
   encoded_db="$(url_encode "${db}")"
@@ -386,25 +400,35 @@ set_default RAILS_MAX_THREADS "5"
 set_default WEB_CONCURRENCY "1"
 set_default PORT "3001"
 
-if [[ -z "${values[APP_HOST]}" ]]; then values[APP_HOST]="${values[SERVER_IP]}"; sources[APP_HOST]="default from SERVER_IP"; fi
-if [[ -z "${values[FRONTEND_ORIGIN]}" ]]; then values[FRONTEND_ORIGIN]="http://${values[SERVER_IP]}"; sources[FRONTEND_ORIGIN]="default from SERVER_IP"; fi
-if [[ -z "${values[FRONTEND_URL]}" ]]; then values[FRONTEND_URL]="http://${values[SERVER_IP]}"; sources[FRONTEND_URL]="default from SERVER_IP"; fi
+server_ip_for_defaults="$(require_value SERVER_IP "SERVER_IP が不足しています。")"
+if [[ -z "${values[APP_HOST]:-}" ]]; then
+  values[APP_HOST]="${server_ip_for_defaults}"
+  sources[APP_HOST]="default from SERVER_IP"
+fi
+if [[ -z "${values[FRONTEND_ORIGIN]:-}" ]]; then
+  values[FRONTEND_ORIGIN]="http://${server_ip_for_defaults}"
+  sources[FRONTEND_ORIGIN]="default from SERVER_IP"
+fi
+if [[ -z "${values[FRONTEND_URL]:-}" ]]; then
+  values[FRONTEND_URL]="http://${server_ip_for_defaults}"
+  sources[FRONTEND_URL]="default from SERVER_IP"
+fi
 
 if [[ "${interactive_enabled}" == true ]]; then
-  [[ "${sources[SERVER_IP]:-}" != "default" ]] || prompt_with_default SERVER_IP "Ubuntu server IP" "${values[SERVER_IP]}"
-  [[ "${sources[LAN_CIDR]:-}" != "default" ]] || prompt_with_default LAN_CIDR "LAN CIDR" "${values[LAN_CIDR]}"
-  [[ "${sources[RAILS_REPO_URL]:-}" != "default" ]] || prompt_with_default RAILS_REPO_URL "Rails repository" "${values[RAILS_REPO_URL]}"
-  [[ "${sources[RAILS_REF]:-}" != "default" ]] || prompt_with_default RAILS_REF "Rails ref" "${values[RAILS_REF]}"
-  [[ "${sources[KEEP_RELEASES]:-}" != "default" ]] || prompt_with_default KEEP_RELEASES "Release retention count" "${values[KEEP_RELEASES]}"
-  [[ "${sources[ENABLE_UFW]:-}" != "default" ]] || prompt_bool ENABLE_UFW "Enable UFW?" "${values[ENABLE_UFW]}"
-  [[ "${sources[ALLOW_SSH]:-}" != "default" ]] || prompt_bool ALLOW_SSH "Allow SSH from LAN CIDR?" "${values[ALLOW_SSH]}"
-  [[ "${sources[REMOVE_NGINX_DEFAULT_SITE]:-}" != "default" ]] || prompt_bool REMOVE_NGINX_DEFAULT_SITE "Remove Nginx default site?" "${values[REMOVE_NGINX_DEFAULT_SITE]}"
-  [[ -n "${values[RAILS_MASTER_KEY]}" ]] || { log "RAILS_MASTER_KEY: not configured"; prompt_secret RAILS_MASTER_KEY "RAILS_MASTER_KEY" false; }
-  if [[ -z "${values[SECRET_KEY_BASE]}" ]]; then
+  [[ "${sources[SERVER_IP]:-}" != "default" ]] || prompt_with_default SERVER_IP "Ubuntu server IP" "${values[SERVER_IP]:-192.168.1.50}"
+  [[ "${sources[LAN_CIDR]:-}" != "default" ]] || prompt_with_default LAN_CIDR "LAN CIDR" "${values[LAN_CIDR]:-192.168.1.0/24}"
+  [[ "${sources[RAILS_REPO_URL]:-}" != "default" ]] || prompt_with_default RAILS_REPO_URL "Rails repository" "${values[RAILS_REPO_URL]:-git@github.com:ShioPy0101/mitsubachi-ruby.git}"
+  [[ "${sources[RAILS_REF]:-}" != "default" ]] || prompt_with_default RAILS_REF "Rails ref" "${values[RAILS_REF]:-main}"
+  [[ "${sources[KEEP_RELEASES]:-}" != "default" ]] || prompt_with_default KEEP_RELEASES "Release retention count" "${values[KEEP_RELEASES]:-5}"
+  [[ "${sources[ENABLE_UFW]:-}" != "default" ]] || prompt_bool ENABLE_UFW "Enable UFW?" "${values[ENABLE_UFW]:-true}"
+  [[ "${sources[ALLOW_SSH]:-}" != "default" ]] || prompt_bool ALLOW_SSH "Allow SSH from LAN CIDR?" "${values[ALLOW_SSH]:-true}"
+  [[ "${sources[REMOVE_NGINX_DEFAULT_SITE]:-}" != "default" ]] || prompt_bool REMOVE_NGINX_DEFAULT_SITE "Remove Nginx default site?" "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}"
+  [[ -n "${values[RAILS_MASTER_KEY]:-}" ]] || { log "RAILS_MASTER_KEY: not configured"; prompt_secret RAILS_MASTER_KEY "RAILS_MASTER_KEY" false; }
+  if [[ -z "${values[SECRET_KEY_BASE]:-}" ]]; then
     prompt_secret_key_base_mode
   fi
-  [[ -n "${values[DATABASE_URL]}" ]] || prompt_database_url
-  [[ "${sources[SESSION_COOKIE_SECURE]:-}" != "default" ]] || prompt_bool SESSION_COOKIE_SECURE "Use insecure HTTP session cookie for LAN testing? (false means LAN HTTP)" "${values[SESSION_COOKIE_SECURE]}"
+  [[ -n "${values[DATABASE_URL]:-}" ]] || prompt_database_url
+  [[ "${sources[SESSION_COOKIE_SECURE]:-}" != "default" ]] || prompt_bool SESSION_COOKIE_SECURE "Use insecure HTTP session cookie for LAN testing? (false means LAN HTTP)" "${values[SESSION_COOKIE_SECURE]:-false}"
 fi
 
 required_keys=(SERVER_IP LAN_CIDR RAILS_REPO_URL RAILS_REF DEPLOY_USER POSTGRES_ROLE POSTGRES_DATABASE KEEP_RELEASES ENABLE_UFW ALLOW_SSH REMOVE_NGINX_DEFAULT_SITE RAILS_MASTER_KEY DATABASE_URL APP_HOST FRONTEND_ORIGIN FRONTEND_URL SESSION_COOKIE_SECURE)
@@ -417,16 +441,30 @@ if [[ -z "${values[SECRET_KEY_BASE]:-}" && "${SECRET_KEY_BASE_OMITTED}" != true 
   die "SECRET_KEY_BASE が不足しています。interactive では自動生成、手入力、省略を選択できます。non-interactive では明示設定してください。"
 fi
 
-private_ipv4 "${values[SERVER_IP]}" || die "SERVER_IP は private IPv4 である必要があります。"
-cidr_contains_ipv4 "${values[LAN_CIDR]}" "${values[SERVER_IP]}" || die "SERVER_IP は LAN_CIDR 内である必要があります。"
-[[ "${values[LAN_CIDR]}" != "0.0.0.0/0" ]] || die "LAN_CIDR に 0.0.0.0/0 は指定できません。"
-if ! [[ "${values[KEEP_RELEASES]}" =~ ^[0-9]+$ ]] || (( values[KEEP_RELEASES] < 1 )); then
+server_ip="$(require_value SERVER_IP "SERVER_IP が不足しています。")"
+lan_cidr="$(require_value LAN_CIDR "LAN_CIDR が不足しています。")"
+rails_repo_url="$(require_value RAILS_REPO_URL "RAILS_REPO_URL が不足しています。")"
+rails_ref="$(require_value RAILS_REF "RAILS_REF が不足しています。")"
+deploy_user="$(require_value DEPLOY_USER "DEPLOY_USER が不足しています。")"
+postgres_role="$(require_value POSTGRES_ROLE "POSTGRES_ROLE が不足しています。")"
+postgres_database="$(require_value POSTGRES_DATABASE "POSTGRES_DATABASE が不足しています。")"
+keep_releases="$(require_value KEEP_RELEASES "KEEP_RELEASES が不足しています。")"
+file_storage_root="$(require_value FILE_STORAGE_ROOT "FILE_STORAGE_ROOT が不足しています。")"
+bulk_download_tmp="$(require_value BULK_DOWNLOAD_TMP "BULK_DOWNLOAD_TMP が不足しています。")"
+max_upload_size_bytes="$(require_value MAX_UPLOAD_SIZE_BYTES "MAX_UPLOAD_SIZE_BYTES が不足しています。")"
+enable_ufw="$(require_value ENABLE_UFW "ENABLE_UFW が不足しています。")"
+allow_ssh="$(require_value ALLOW_SSH "ALLOW_SSH が不足しています。")"
+
+private_ipv4 "${server_ip}" || die "SERVER_IP は private IPv4 である必要があります。"
+cidr_contains_ipv4 "${lan_cidr}" "${server_ip}" || die "SERVER_IP は LAN_CIDR 内である必要があります。"
+[[ "${lan_cidr}" != "0.0.0.0/0" ]] || die "LAN_CIDR に 0.0.0.0/0 は指定できません。"
+if ! [[ "${keep_releases}" =~ ^[0-9]+$ ]] || (( keep_releases < 1 )); then
   die "KEEP_RELEASES は正の整数である必要があります。"
 fi
-[[ "${values[FILE_STORAGE_ROOT]}" == "/mnt/external-hdd/mitsubachi/files" ]] || die "FILE_STORAGE_ROOT は /mnt/external-hdd/mitsubachi/files に固定してください。"
-[[ "${values[BULK_DOWNLOAD_TMP]}" == "/mnt/external-hdd/mitsubachi/tmp/bulk_downloads" ]] || die "BULK_DOWNLOAD_TMP は /mnt/external-hdd/mitsubachi/tmp/bulk_downloads に固定してください。"
-[[ "${values[MAX_UPLOAD_SIZE_BYTES]}" == "10737418240" ]] || die "MAX_UPLOAD_SIZE_BYTES は 10737418240 にしてください。"
-if [[ "${values[ENABLE_UFW]}" == true && "${values[ALLOW_SSH]}" != true ]]; then
+[[ "${file_storage_root}" == "/mnt/external-hdd/mitsubachi/files" ]] || die "FILE_STORAGE_ROOT は /mnt/external-hdd/mitsubachi/files に固定してください。"
+[[ "${bulk_download_tmp}" == "/mnt/external-hdd/mitsubachi/tmp/bulk_downloads" ]] || die "BULK_DOWNLOAD_TMP は /mnt/external-hdd/mitsubachi/tmp/bulk_downloads に固定してください。"
+[[ "${max_upload_size_bytes}" == "10737418240" ]] || die "MAX_UPLOAD_SIZE_BYTES は 10737418240 にしてください。"
+if [[ "${enable_ufw}" == true && "${allow_ssh}" != true ]]; then
   die "ENABLE_UFW=true の場合は、SSH 締め出し防止のため ALLOW_SSH=true が必要です。"
 fi
 
@@ -446,18 +484,21 @@ summary_secret_state() {
 cat <<SUMMARY
 Installation summary
 --------------------
-Server IP:          ${values[SERVER_IP]}
-LAN CIDR:           ${values[LAN_CIDR]}
-Rails repository:   ${values[RAILS_REPO_URL]}
-Rails ref:          ${values[RAILS_REF]}
-Deploy user:        ${values[DEPLOY_USER]}
+Server IP:          ${server_ip}
+LAN CIDR:           ${lan_cidr}
+Rails repository:   ${rails_repo_url}
+Rails ref:          ${rails_ref}
+Deploy user:        ${deploy_user}
 App root:           /var/www/mitsubachi
-Storage root:       ${values[FILE_STORAGE_ROOT]}
-Bulk ZIP tmp:       ${values[BULK_DOWNLOAD_TMP]}
-PostgreSQL role:    ${values[POSTGRES_ROLE]}
-PostgreSQL DB:      ${values[POSTGRES_DATABASE]}
-Enable UFW:         ${values[ENABLE_UFW]}
-Allow SSH:          ${values[ALLOW_SSH]}
+Storage root:       ${file_storage_root}
+Bulk ZIP tmp:       ${bulk_download_tmp}
+App host:           ${values[APP_HOST]:-}
+Frontend origin:    ${values[FRONTEND_ORIGIN]:-}
+Frontend URL:       ${values[FRONTEND_URL]:-}
+PostgreSQL role:    ${postgres_role}
+PostgreSQL DB:      ${postgres_database}
+Enable UFW:         ${enable_ufw}
+Allow SSH:          ${allow_ssh}
 Rails env file:     ${RAILS_ENV_DEST}
 Rails master key:   $(summary_secret_state RAILS_MASTER_KEY)
 Secret key base:    $(summary_secret_state SECRET_KEY_BASE)
@@ -468,7 +509,7 @@ SUMMARY
 if [[ "${YES}" != true && "${interactive_enabled}" == true ]]; then
   proceed=false
   prompt_bool proceed "Proceed with installation?" "false"
-  [[ "${values[proceed]}" == true ]] || die "利用者が中止しました。変更は行っていません。"
+  [[ "${values[proceed]:-}" == true ]] || die "利用者が中止しました。変更は行っていません。"
 elif [[ "${YES}" != true && "${interactive_enabled}" != true ]]; then
   die "--yes が指定されていないため、非対話実行では開始しません。"
 fi
@@ -476,7 +517,7 @@ fi
 write_non_secret_config=false
 if [[ ! -f "${CONFIG_FILE}" && "${interactive_enabled}" == true ]]; then
   prompt_bool SAVE_CONFIG "Save non-secret configuration to ${CONFIG_FILE}?" "true"
-  write_non_secret_config="${values[SAVE_CONFIG]}"
+  write_non_secret_config="${values[SAVE_CONFIG]:-false}"
 fi
 
 write_config_file() {
@@ -485,17 +526,17 @@ write_config_file() {
   tmp="$(mktemp)"
   chmod 0600 "${tmp}"
   {
-    printf 'SERVER_IP=%s\n' "${values[SERVER_IP]}"
-    printf 'LAN_CIDR=%s\n' "${values[LAN_CIDR]}"
-    printf 'RAILS_REPO_URL=%s\n' "${values[RAILS_REPO_URL]}"
-    printf 'RAILS_REF=%s\n' "${values[RAILS_REF]}"
-    printf 'DEPLOY_USER=%s\n' "${values[DEPLOY_USER]}"
-    printf 'POSTGRES_ROLE=%s\n' "${values[POSTGRES_ROLE]}"
-    printf 'POSTGRES_DATABASE=%s\n' "${values[POSTGRES_DATABASE]}"
-    printf 'KEEP_RELEASES=%s\n' "${values[KEEP_RELEASES]}"
-    printf 'ENABLE_UFW=%s\n' "${values[ENABLE_UFW]}"
-    printf 'ALLOW_SSH=%s\n' "${values[ALLOW_SSH]}"
-    printf 'REMOVE_NGINX_DEFAULT_SITE=%s\n' "${values[REMOVE_NGINX_DEFAULT_SITE]}"
+    printf 'SERVER_IP=%s\n' "${server_ip}"
+    printf 'LAN_CIDR=%s\n' "${lan_cidr}"
+    printf 'RAILS_REPO_URL=%s\n' "${rails_repo_url}"
+    printf 'RAILS_REF=%s\n' "${rails_ref}"
+    printf 'DEPLOY_USER=%s\n' "${deploy_user}"
+    printf 'POSTGRES_ROLE=%s\n' "${postgres_role}"
+    printf 'POSTGRES_DATABASE=%s\n' "${postgres_database}"
+    printf 'KEEP_RELEASES=%s\n' "${keep_releases}"
+    printf 'ENABLE_UFW=%s\n' "${enable_ufw}"
+    printf 'ALLOW_SSH=%s\n' "${allow_ssh}"
+    printf 'REMOVE_NGINX_DEFAULT_SITE=%s\n' "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}"
   } > "${tmp}"
   install -d -m 0755 -- "$(dirname -- "${target}")"
   install -m 0600 -- "${tmp}" "${target}"
@@ -549,8 +590,8 @@ install_rails_env_file() {
   if [[ -f "${RAILS_ENV_DEST}" && "${OVERWRITE_RAILS_ENV}" == true ]]; then
     backup_if_exists "${RAILS_ENV_DEST}"
   fi
-  install -d -o root -g "${values[DEPLOY_USER]}" -m 0750 -- "$(dirname -- "${RAILS_ENV_DEST}")"
-  install -o root -g "${values[DEPLOY_USER]}" -m 0640 -- "${tmp}" "${RAILS_ENV_DEST}"
+  install -d -o root -g "${deploy_user}" -m 0750 -- "$(dirname -- "${RAILS_ENV_DEST}")"
+  install -o root -g "${deploy_user}" -m 0640 -- "${tmp}" "${RAILS_ENV_DEST}"
   rm -f -- "${tmp}"
 }
 
@@ -571,21 +612,21 @@ if [[ -f "${RAILS_ENV_DEST}" && "${OVERWRITE_RAILS_ENV}" != true ]]; then
 fi
 install_rails_env_file
 
-bootstrap_args=(--app-repo "${values[RAILS_REPO_URL]}" --install-nginx-config --install-systemd-unit)
-if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]}" == true ]]; then
+bootstrap_args=(--app-repo "${rails_repo_url}" --install-nginx-config --install-systemd-unit)
+if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}" == true ]]; then
   bootstrap_args+=(--remove-default-site)
 fi
 "${SCRIPT_DIR}/bootstrap_ubuntu.sh" "${bootstrap_args[@]}"
 
-network_args=(--lan-cidr "${values[LAN_CIDR]}" --server-ip "${values[SERVER_IP]}" --install-nginx-config)
-if [[ "${values[ENABLE_UFW]}" == true ]]; then network_args+=(--enable-ufw); fi
-if [[ "${values[ALLOW_SSH]}" == true ]]; then network_args+=(--allow-ssh); fi
-if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]}" == true ]]; then network_args+=(--remove-default-site); fi
+network_args=(--lan-cidr "${lan_cidr}" --server-ip "${server_ip}" --install-nginx-config)
+if [[ "${enable_ufw}" == true ]]; then network_args+=(--enable-ufw); fi
+if [[ "${allow_ssh}" == true ]]; then network_args+=(--allow-ssh); fi
+if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}" == true ]]; then network_args+=(--remove-default-site); fi
 "${SCRIPT_DIR}/configure_local_network.sh" "${network_args[@]}"
 
-sudo -u "${values[DEPLOY_USER]}" "${SCRIPT_DIR}/deploy_api.sh" \
-  --repo-url "${values[RAILS_REPO_URL]}" \
-  --ref "${values[RAILS_REF]}" \
-  --keep-releases "${values[KEEP_RELEASES]}"
+sudo -u "${deploy_user}" "${SCRIPT_DIR}/deploy_api.sh" \
+  --repo-url "${rails_repo_url}" \
+  --ref "${rails_ref}" \
+  --keep-releases "${keep_releases}"
 
 log "対話式 LAN install が完了しました。"

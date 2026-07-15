@@ -59,6 +59,8 @@ trap cleanup EXIT
 
 install_config="${tmpdir}/local.env"
 install_rails_env="${tmpdir}/rails.env"
+install_rails_env_min="${tmpdir}/rails-min.env"
+install_rails_env_explicit="${tmpdir}/rails-explicit.env"
 cat > "${install_config}" <<'CONFIG'
 SERVER_IP=192.168.1.50
 LAN_CIDR=192.168.1.0/24
@@ -86,6 +88,27 @@ chmod 0600 "${install_config}"
   printf '%s=%s\n' SESSION_COOKIE_SECURE false
 } > "${install_rails_env}"
 chmod 0600 "${install_rails_env}"
+{
+  printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
+  printf '%s=%s\n' SECRET_KEY_BASE test-secret-key-base-placeholder
+  printf '%s=%s\n' DATABASE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production
+  printf '%s=%s\n' FILE_STORAGE_ROOT /mnt/external-hdd/mitsubachi/files
+  printf '%s=%s\n' MAX_UPLOAD_SIZE_BYTES 10737418240
+  printf '%s=%s\n' SESSION_COOKIE_SECURE false
+} > "${install_rails_env_min}"
+chmod 0600 "${install_rails_env_min}"
+{
+  printf '%s=%s\n' RAILS_MASTER_KEY test-master-key-placeholder
+  printf '%s=%s\n' SECRET_KEY_BASE test-secret-key-base-placeholder
+  printf '%s=%s\n' DATABASE_URL postgresql://mitsubachi:test-password-placeholder@127.0.0.1:5432/mitsubachi_production
+  printf '%s=%s\n' FILE_STORAGE_ROOT /mnt/external-hdd/mitsubachi/files
+  printf '%s=%s\n' MAX_UPLOAD_SIZE_BYTES 10737418240
+  printf '%s=%s\n' APP_HOST 192.168.1.60
+  printf '%s=%s\n' FRONTEND_ORIGIN http://192.168.1.60
+  printf '%s=%s\n' FRONTEND_URL http://192.168.1.60
+  printf '%s=%s\n' SESSION_COOKIE_SECURE false
+} > "${install_rails_env_explicit}"
+chmod 0600 "${install_rails_env_explicit}"
 touch "${tmpdir}/empty-rails.env"
 chmod 0600 "${tmpdir}/empty-rails.env"
 
@@ -100,12 +123,47 @@ if rg -n 'test-master-key-placeholder|test-secret-key-base-placeholder|test-pass
 fi
 pass "install dry-run redacts secrets"
 
+run_expect_success "install defaults APP_HOST and frontend URLs" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config}" \
+  --rails-env-file "${install_rails_env_min}" \
+  --non-interactive \
+  --yes \
+  --dry-run
+grep -F 'App host:           192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "APP_HOST defaults to SERVER_IP"
+grep -F 'Frontend origin:    http://192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN defaults to SERVER_IP"
+grep -F 'Frontend URL:       http://192.168.1.50' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL defaults to SERVER_IP"
+pass "install default host values"
+
+run_expect_success "install preserves explicit APP_HOST and frontend URLs" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config}" \
+  --rails-env-file "${install_rails_env_explicit}" \
+  --non-interactive \
+  --yes \
+  --dry-run
+grep -F 'App host:           192.168.1.60' /tmp/mitsubachi-test.out >/dev/null || fail "APP_HOST explicit value preserved"
+grep -F 'Frontend origin:    http://192.168.1.60' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN explicit value preserved"
+grep -F 'Frontend URL:       http://192.168.1.60' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL explicit value preserved"
+pass "install explicit host values"
+
+if command -v script >/dev/null 2>&1; then
+  run_expect_success "install interactive TTY dry-run" script -qfec "bash '${ROOT}/scripts/install_local.sh' --config '${install_config}' --rails-env-file '${install_rails_env_min}' --interactive --yes --dry-run" /dev/null
+  if rg -n 'unbound variable|未割り当ての変数' /tmp/mitsubachi-test.out /tmp/mitsubachi-test.err >/dev/null 2>&1; then
+    fail "install interactive TTY dry-run used unbound variable error"
+  fi
+  pass "install interactive path avoids unbound variables"
+fi
+
 run_expect_failure "install non-interactive missing secrets fails" bash "${ROOT}/scripts/install_local.sh" \
   --config "${install_config}" \
   --rails-env-file "${tmpdir}/empty-rails.env" \
   --non-interactive \
   --yes \
   --dry-run
+if rg -n 'unbound variable|未割り当ての変数' /tmp/mitsubachi-test.err >/dev/null 2>&1; then
+  fail "install missing required value used unbound variable error"
+fi
+rg -n 'RAILS_MASTER_KEY が不足しています' /tmp/mitsubachi-test.err >/dev/null || fail "install missing required value lacks explicit error"
+pass "install missing required value reports explicit error"
 
 if rg -n 'RAILS_MASTER_KEY|SECRET_KEY_BASE|DATABASE_URL|RESEND_API_KEY' "${install_config}" >/dev/null 2>&1; then
   fail "config/local.env contains secret keys"
