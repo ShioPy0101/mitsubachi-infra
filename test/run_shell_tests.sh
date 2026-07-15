@@ -50,6 +50,18 @@ run_expect_failure "backup storage rejects invalid argument" bash "${ROOT}/scrip
 run_expect_failure "install rejects interactive without TTY" bash "${ROOT}/scripts/install_local.sh" --interactive --dry-run
 run_expect_failure "install rejects interactive and non-interactive together" bash "${ROOT}/scripts/install_local.sh" --interactive --non-interactive --dry-run
 run_expect_failure "install rejects invalid bool" bash "${ROOT}/scripts/install_local.sh" --enable-ufw maybe --dry-run
+if rg -n 'require_root' "${ROOT}/scripts/install_local.sh" >/dev/null 2>&1; then
+  fail "install_local must not require root for whole script"
+fi
+grep -F "if [[ \"\${EUID}\" -eq 0 ]]" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install root execution guard"
+if rg -n 'sudo +(ruby|bundle|gem)|sudo -u .* +(ruby|bundle|gem)' "${ROOT}/scripts/install_local.sh" >/dev/null 2>&1; then
+  fail "install_local must not run ruby/bundle/gem with sudo directly"
+fi
+grep -F "env HOME=\"\${home}\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy HOME is explicit"
+grep -F "RBENV_ROOT=\"\${home}/.rbenv\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy RBENV_ROOT is explicit"
+grep -F "PATH=\"\${home}/.rbenv/bin:\${home}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin\"" "${ROOT}/scripts/install_local.sh" >/dev/null || fail "install deploy PATH is explicit"
+grep -F 'sudo -u deploy env HOME=/home/deploy' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap app repo clone uses deploy HOME"
+pass "install sudo/user boundary static checks"
 
 tmpdir="$(mktemp -d)"
 cleanup() {
@@ -175,6 +187,16 @@ grep -F 'App host:           192.168.10.151' /tmp/mitsubachi-test.out >/dev/null
 grep -F 'Frontend origin:    http://192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_ORIGIN derives from CLI SERVER_IP"
 grep -F 'Frontend URL:       http://192.168.10.151' /tmp/mitsubachi-test.out >/dev/null || fail "FRONTEND_URL derives from CLI SERVER_IP"
 pass "install CLI server derived host values"
+
+run_expect_success "install accepts HTTPS Rails repository URL" bash "${ROOT}/scripts/install_local.sh" \
+  --config "${install_config_empty}" \
+  --rails-env-file "${install_rails_env_min}" \
+  --rails-repo-url https://github.com/ShioPy0101/mitsubachi-ruby.git \
+  --non-interactive \
+  --yes \
+  --dry-run
+grep -F 'Rails repository:   https://github.com/ShioPy0101/mitsubachi-ruby.git' /tmp/mitsubachi-test.out >/dev/null || fail "HTTPS Rails repo shown"
+pass "install HTTPS git URL"
 
 run_expect_success "install preserves explicit APP_HOST and frontend URLs" bash "${ROOT}/scripts/install_local.sh" \
   --config "${install_config}" \

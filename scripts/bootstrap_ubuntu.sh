@@ -111,7 +111,12 @@ trap cleanup EXIT
 if [[ -n "${APP_REPO}" && ( -z "${RUBY_VERSION}" || -z "${BUNDLER_VERSION}" ) ]]; then
   require_command git
   tmp_repo="$(mktemp -d)"
-  git clone --depth 1 -- "${APP_REPO}" "${tmp_repo}"
+  chown deploy:deploy "${tmp_repo}"
+  # Rails repository may be private.  Version discovery must therefore use the
+  # same deploy user's SSH configuration as real deployments, never root's
+  # /root/.ssh created by sudo execution.
+  sudo -u deploy env HOME=/home/deploy \
+    git clone --depth 1 -- "${APP_REPO}" "${tmp_repo}"
   if [[ -z "${RUBY_VERSION}" && -f "${tmp_repo}/.ruby-version" ]]; then
     RUBY_VERSION="$(tr -d '[:space:]' < "${tmp_repo}/.ruby-version")"
   fi

@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: sudo scripts/install_local.sh [options]
+Usage: scripts/install_local.sh [options]
 
 Options:
   --config PATH                 Non-secret install config. Default candidate: config/local.env.
@@ -64,6 +64,37 @@ OVERWRITE_RAILS_ENV=false
 UPDATE_RAILS_ENV=false
 UPDATE_SECRETS=false
 SECRET_KEY_BASE_OMITTED=false
+
+INVOKING_USER="${SUDO_USER:-$(id -un)}"
+INVOKING_HOME="$(getent passwd "${INVOKING_USER}" | cut -d: -f6)"
+[[ -n "${INVOKING_HOME}" ]] || die "呼び出し元ユーザー ${INVOKING_USER} の HOME を getent passwd から解決できません。"
+
+if [[ "${EUID}" -eq 0 ]]; then
+  die "install_local.sh は root で実行しないでください。通常ユーザーで ./scripts/install_local.sh を実行し、必要な処理だけ sudo します。root の HOME や SSH 鍵を使わないために停止します。"
+fi
+
+sudo_cmd() {
+  log "running as root via sudo: $*"
+  sudo "$@"
+}
+
+deploy_home_for() {
+  local user="$1"
+  getent passwd "${user}" | cut -d: -f6
+}
+
+run_as_deploy() {
+  local user="$1"
+  local home="$2"
+  shift 2
+  [[ -n "${home}" ]] || die "deploy ユーザー ${user} の HOME が解決できません。"
+  log "running as ${user}: $*"
+  sudo -u "${user}" \
+    env HOME="${home}" \
+        RBENV_ROOT="${home}/.rbenv" \
+        PATH="${home}/.rbenv/bin:${home}/.rbenv/shims:/usr/local/bin:/usr/bin:/bin" \
+    "$@"
+}
 
 set_cli_value() {
   local key="$1"
@@ -472,6 +503,7 @@ max_upload_size_bytes="$(require_value MAX_UPLOAD_SIZE_BYTES "MAX_UPLOAD_SIZE_BY
 enable_ufw="$(require_value ENABLE_UFW "ENABLE_UFW が不足しています。")"
 allow_ssh="$(require_value ALLOW_SSH "ALLOW_SSH が不足しています。")"
 
+[[ "${deploy_user}" == "deploy" ]] || die "現在の systemd/bootstrap 設計では DEPLOY_USER=deploy のみ対応しています。指定値=${deploy_user}"
 private_ipv4 "${server_ip}" || die "SERVER_IP は private IPv4 である必要があります。"
 cidr_contains_ipv4 "${lan_cidr}" "${server_ip}" || die "SERVER_IP は LAN_CIDR 内である必要があります。"
 [[ "${lan_cidr}" != "0.0.0.0/0" ]] || die "LAN_CIDR に 0.0.0.0/0 は指定できません。"
@@ -496,6 +528,16 @@ validate_derived_default() {
 validate_derived_default APP_HOST "${server_ip}"
 validate_derived_default FRONTEND_ORIGIN "http://${server_ip}"
 validate_derived_default FRONTEND_URL "http://${server_ip}"
+
+log "invoking user: ${INVOKING_USER}"
+log "invoking home: ${INVOKING_HOME}"
+log "deploy user: ${deploy_user}"
+if [[ "${DRY_RUN}" != true ]]; then
+  log "checking sudo credentials for root-only installation steps"
+  sudo -v || die "sudo を利用できないため停止します。apt、/etc、/var、/mnt、systemd、Nginx、UFW の設定に sudo が必要です。"
+  log "checking external HDD mount before installation starts"
+  mountpoint -q "${EXTERNAL_HDD}" || die "${EXTERNAL_HDD} は mount point ではありません。外付け HDD 未 mount のまま install を開始しません。"
+fi
 
 for key in "${!values[@]}"; do
   print_source "${key}"
@@ -617,10 +659,10 @@ install_rails_env_file() {
   chmod 0600 "${tmp}"
   compose_rails_env "${tmp}"
   if [[ -f "${RAILS_ENV_DEST}" && "${OVERWRITE_RAILS_ENV}" == true ]]; then
-    backup_if_exists "${RAILS_ENV_DEST}"
+    sudo_cmd cp -a -- "${RAILS_ENV_DEST}" "${RAILS_ENV_DEST}.backup.$(date -u '+%Y%m%dT%H%M%SZ')"
   fi
-  install -d -o root -g "${deploy_user}" -m 0750 -- "$(dirname -- "${RAILS_ENV_DEST}")"
-  install -o root -g "${deploy_user}" -m 0640 -- "${tmp}" "${RAILS_ENV_DEST}"
+  sudo_cmd install -d -o root -g "${deploy_user}" -m 0750 -- "$(dirname -- "${RAILS_ENV_DEST}")"
+  sudo_cmd install -o root -g "${deploy_user}" -m 0640 -- "${tmp}" "${RAILS_ENV_DEST}"
   rm -f -- "${tmp}"
 }
 
@@ -629,7 +671,6 @@ if [[ "${DRY_RUN}" == true ]]; then
   exit 0
 fi
 
-require_root
 require_command install
 
 if [[ "${write_non_secret_config}" == true ]]; then
@@ -645,15 +686,31 @@ bootstrap_args=(--app-repo "${rails_repo_url}" --install-nginx-config --install-
 if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}" == true ]]; then
   bootstrap_args+=(--remove-default-site)
 fi
-"${SCRIPT_DIR}/bootstrap_ubuntu.sh" "${bootstrap_args[@]}"
+log "running bootstrap_ubuntu.sh as root; it creates system users, directories, packages, Nginx, and systemd"
+sudo_cmd "${SCRIPT_DIR}/bootstrap_ubuntu.sh" "${bootstrap_args[@]}"
+
+deploy_home="$(deploy_home_for "${deploy_user}")"
+[[ -n "${deploy_home}" ]] || die "deploy ユーザー ${deploy_user} が存在しない、または HOME を解決できません。bootstrap が失敗していないか確認してください。"
+log "deploy home: ${deploy_home}"
 
 network_args=(--lan-cidr "${lan_cidr}" --server-ip "${server_ip}" --install-nginx-config)
 if [[ "${enable_ufw}" == true ]]; then network_args+=(--enable-ufw); fi
 if [[ "${allow_ssh}" == true ]]; then network_args+=(--allow-ssh); fi
 if [[ "${values[REMOVE_NGINX_DEFAULT_SITE]:-false}" == true ]]; then network_args+=(--remove-default-site); fi
-"${SCRIPT_DIR}/configure_local_network.sh" "${network_args[@]}"
+log "running configure_local_network.sh as root for Nginx/UFW changes"
+sudo_cmd "${SCRIPT_DIR}/configure_local_network.sh" "${network_args[@]}"
 
-sudo -u "${deploy_user}" "${SCRIPT_DIR}/deploy_api.sh" \
+log "checking deploy user Ruby/Bundler visibility in a non-interactive rbenv environment"
+run_as_deploy "${deploy_user}" "${deploy_home}" bash -lc 'command -v ruby >/dev/null && ruby -v >/dev/null && command -v bundle >/dev/null && bundle -v >/dev/null' \
+  || die "deploy ユーザー ${deploy_user} で ruby/bundle を実行できません。${deploy_home}/.rbenv の導入状態と PATH を確認してください。"
+
+if [[ "${rails_repo_url}" == git@*:* ]]; then
+  log "checking Rails repository access as ${deploy_user}; root の SSH 鍵は使用しません"
+  run_as_deploy "${deploy_user}" "${deploy_home}" git ls-remote "${rails_repo_url}" HEAD >/dev/null \
+    || die "deploy ユーザー ${deploy_user} で Rails repository を読めません。${deploy_home}/.ssh の read-only deploy key または HTTPS URL を確認してください。"
+fi
+
+run_as_deploy "${deploy_user}" "${deploy_home}" "${SCRIPT_DIR}/deploy_api.sh" \
   --repo-url "${rails_repo_url}" \
   --ref "${rails_ref}" \
   --keep-releases "${keep_releases}"

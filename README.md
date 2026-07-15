@@ -325,7 +325,7 @@ cd mitsubachi-infra
 不足項目だけを対話入力し、最後に secret を伏せた summary を確認してから install を開始します。
 
 ```bash
-sudo ./scripts/install_local.sh --interactive
+./scripts/install_local.sh --interactive
 ```
 
 `install_local.sh` の値の優先順位:
@@ -340,13 +340,15 @@ sudo ./scripts/install_local.sh --interactive
 
 標準入力と標準出力が TTY の場合だけ不足値を対話入力します。CI、cron、非対話 SSH では入力待ちで停止せず、`--non-interactive` 相当として扱います。`--interactive` と `--non-interactive` の同時指定は拒否します。
 
+`install_local.sh` 自体は root で実行しません。通常ユーザーで起動し、apt、`/etc`、`/var`、`/mnt`、systemd、Nginx、UFW など root 権限が必要な操作だけ内部で `sudo` を使います。root の `HOME` や `~/.ssh` を Git clone に使わないため、`sudo ./scripts/install_local.sh` は拒否します。
+
 ### 設定ファイルを使う方法
 
 ```bash
 cp config/local.env.example config/local.env
 cp env/rails.env.example env/rails.env
 
-sudo ./scripts/install_local.sh \
+./scripts/install_local.sh \
   --config ./config/local.env \
   --rails-env-file ./env/rails.env
 ```
@@ -358,7 +360,7 @@ sudo ./scripts/install_local.sh \
 ### 非対話実行
 
 ```bash
-sudo ./scripts/install_local.sh \
+./scripts/install_local.sh \
   --config ./config/local.env \
   --rails-env-file ./env/rails.env \
   --non-interactive \
@@ -370,7 +372,7 @@ sudo ./scripts/install_local.sh \
 事前確認だけを行う場合:
 
 ```bash
-sudo ./scripts/install_local.sh \
+./scripts/install_local.sh \
   --config ./config/local.env \
   --rails-env-file ./env/rails.env \
   --non-interactive \
@@ -755,7 +757,7 @@ upload 中の完全な snapshot consistency は保証しません。厳密な同
 2. disk free: `df -h /mnt/external-hdd`
 3. environment file: `/etc/mitsubachi/rails.env` の存在と `root:deploy 0640`
 4. PostgreSQL: `sudo systemctl status postgresql`
-5. Rails boot: `sudo -u deploy bash -lc 'cd /var/www/mitsubachi/current && bundle exec rails runner "puts :ok"'`
+5. Rails boot: `sudo -u deploy env HOME=/home/deploy RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/bin:/home/deploy/.rbenv/shims:/usr/local/bin:/usr/bin:/bin bash -lc 'cd /var/www/mitsubachi/current && bundle exec rails runner "puts :ok"'`
 6. Puma localhost health: `curl -i http://127.0.0.1:3001/api/health/ready`
 7. systemd: `sudo journalctl -u mitsubachi-api -n 200 --no-pager`
 8. Nginx config: `sudo nginx -t`
