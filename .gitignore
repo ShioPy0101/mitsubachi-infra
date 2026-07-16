@@ -5,6 +5,7 @@
 /log/
 /config/local.env
 /env/rails.env
+/env/frontend.env
 /vendor/bundle/
 /coverage/
 *.dump

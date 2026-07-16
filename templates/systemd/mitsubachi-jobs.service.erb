@@ -1,5 +1,5 @@
 [Unit]
-Description=Mitsubachi Rails API
+Description=Mitsubachi Solid Queue Worker
 After=network-online.target
 Wants=network-online.target
 
@@ -7,16 +7,15 @@ Wants=network-online.target
 Type=simple
 User=<%= @config.fetch("server").fetch("deploy_user") %>
 Group=<%= @config.fetch("server").fetch("deploy_user") %>
-EnvironmentFile=<%= @config.fetch("paths").fetch("rails_env") %>
 WorkingDirectory=<%= @config.fetch("paths").fetch("rails_root") %>/current
+EnvironmentFile=<%= @config.fetch("paths").fetch("rails_env") %>
 Environment=RAILS_ENV=production
 Environment=RACK_ENV=production
 Environment=RBENV_ROOT=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv
 Environment=PATH=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims:/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStartPre=/usr/bin/test -L <%= @config.fetch("paths").fetch("rails_root") %>/current
-ExecStartPre=/usr/bin/test -f <%= @config.fetch("paths").fetch("rails_root") %>/current/Gemfile
-ExecStartPre=/usr/bin/test -f <%= @config.fetch("paths").fetch("rails_env") %>
-ExecStart=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims/bundle exec puma -e production -b tcp://127.0.0.1:<%= @config.fetch("ports").fetch("rails") %>
+ExecStartPre=/usr/bin/test -f <%= @config.fetch("paths").fetch("rails_root") %>/current/bin/jobs
+ExecStart=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims/bundle exec bin/jobs
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=60s

@@ -33,6 +33,7 @@ run_expect_failure() {
 }
 
 run_expect_success "ruby cli help" ruby "${ROOT}/bin/mitsubachi-infra" help
+run_expect_success "ruby exe cli help" ruby "${ROOT}/exe/mitsubachi-infra" help
 run_expect_failure "install bootstrap requires root" bash "${ROOT}/scripts/install_local.sh" --dry-run
 grep -F 'root 権限で実行してください' /tmp/mitsubachi-test.err >/dev/null || fail "bootstrap root error is clear"
 
@@ -53,12 +54,19 @@ run_expect_success "legacy scripts still expose help" bash "${ROOT}/scripts/depl
 run_expect_success "rollback legacy help" bash "${ROOT}/scripts/rollback_api.sh" --help
 run_expect_success "backup postgres legacy help" bash "${ROOT}/scripts/backup_postgres.sh" --help
 
-grep -F 'EnvironmentFile=/etc/mitsubachi/rails.env' "${ROOT}/templates/systemd/mitsubachi-api.service.erb" >/dev/null || fail "systemd template reads rails env"
+grep -F 'EnvironmentFile=<%= @config.fetch("paths").fetch("rails_env") %>' "${ROOT}/templates/systemd/mitsubachi-api.service.erb" >/dev/null || fail "systemd template reads rails env"
+grep -F 'bundle exec bin/jobs' "${ROOT}/templates/systemd/mitsubachi-jobs.service.erb" >/dev/null || fail "worker systemd template runs bin/jobs"
+grep -F 'reverse_proxy 127.0.0.1:<%= config.fetch("ports").fetch("rails") %>' "${ROOT}/templates/caddy/Caddyfile.erb" >/dev/null || fail "Caddy proxies API to localhost Rails"
+grep -F 'try_files {path} /index.html' "${ROOT}/templates/caddy/Caddyfile.erb" >/dev/null || fail "Caddy template has SPA fallback"
 # shellcheck disable=SC2016
 grep -F 'try_files $uri $uri/ /index.html;' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan template has SPA fallback"
 grep -F 'location /api/' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan keeps api proxy"
 grep -F 'certbot' "${ROOT}/lib/mitsubachi_infra/certbot.rb" >/dev/null || fail "certbot integration exists"
 grep -F 'Open3.capture3' "${ROOT}/lib/mitsubachi_infra/command_runner.rb" >/dev/null || fail "CommandRunner uses Open3"
+
+if rg -n 'StrictHostKeyChecking=no|ssh .*@|scp ' "${ROOT}/lib" >/tmp/mitsubachi-test.out 2>/tmp/mitsubachi-test.err; then
+  fail "production CLI must not automate SSH from development host"
+fi
 
 if rg -n 'system\\("|`git |git clone #|certbot .*#\\{' "${ROOT}/lib" >/tmp/mitsubachi-test.out 2>/tmp/mitsubachi-test.err; then
   fail "ruby code must not assemble shell commands"

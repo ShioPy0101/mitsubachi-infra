@@ -13,6 +13,7 @@ require_relative "health_check"
 require_relative "installer"
 require_relative "lock"
 require_relative "nginx"
+require_relative "production"
 require_relative "status"
 require_relative "systemd"
 
@@ -30,6 +31,18 @@ module MitsubachiInfra
       @config = Configuration.new(@options[:config])
       @runner = CommandRunner.new(logger: $stderr, dry_run: @options[:dry_run])
       case command
+      when "bootstrap" then locked { production.bootstrap }
+      when "configure" then locked { production.bootstrap }
+      when "production-check" then production.production_check
+      when "doctor" then production.doctor
+      when "mail-test" then mail_test
+      when "redeploy" then deploy_production_alias("all")
+      when "deploy-backend" then deploy_production_alias("backend")
+      when "deploy-frontend" then deploy_production_alias("frontend")
+      when "rollback-backend" then locked { production.rollback("backend") }
+      when "rollback-frontend" then locked { production.rollback("frontend") }
+      when "caddy-install" then locked { production.bootstrap }
+      when "caddy-configure" then locked { production.bootstrap }
       when "install" then install
       when "deploy" then deploy
       when "rollback" then rollback
@@ -69,6 +82,10 @@ module MitsubachiInfra
         parser.on("--frontend-ref REF") { |v| opts[:frontend_ref] = v }
       end.parse!(@argv)
       locked do
+        if production_configured?
+          production.deploy(target, backend_ref: opts[:backend_ref] || opts[:ref], frontend_ref: opts[:frontend_ref] || opts[:ref])
+          next
+        end
         systemd = Systemd.new(runner: @runner)
         health = HealthCheck.new(logger: $stderr)
         DeployUser.new(config: @config, runner: @runner).ensure!
@@ -86,6 +103,10 @@ module MitsubachiInfra
     def rollback
       target = @argv.first && !@argv.first.start_with?("-") ? @argv.shift : "all"
       OptionParser.new.parse!(@argv)
+      if production_configured?
+        locked { production.rollback(target) }
+        return
+      end
       locked { Deployment::Rollback.new(config: @config, runner: @runner, systemd: Systemd.new(runner: @runner), health: HealthCheck.new(logger: $stderr)).rollback(target) }
     end
 
@@ -113,12 +134,48 @@ module MitsubachiInfra
     def usage
       <<~USAGE
         Usage:
+          mitsubachi-infra bootstrap [--dry-run]
+          mitsubachi-infra configure [--dry-run]
           mitsubachi-infra install [--interactive] [--dry-run]
           mitsubachi-infra deploy [all|backend|frontend] [--ref REF] [--dry-run]
+          mitsubachi-infra deploy-backend [--dry-run]
+          mitsubachi-infra deploy-frontend [--dry-run]
+          mitsubachi-infra redeploy [--dry-run]
           mitsubachi-infra rollback [all|backend|frontend] [--dry-run]
+          mitsubachi-infra rollback-backend [--dry-run]
+          mitsubachi-infra rollback-frontend [--dry-run]
+          mitsubachi-infra production-check [--dry-run]
+          mitsubachi-infra doctor [--dry-run]
+          mitsubachi-infra mail-test --to ADDRESS [--dry-run]
+          mitsubachi-infra caddy-install [--dry-run]
+          mitsubachi-infra caddy-configure [--dry-run]
           mitsubachi-infra status [--json]
           mitsubachi-infra https check|enable|renew|status [--staging] [--dry-run]
       USAGE
+    end
+
+    def mail_test
+      opts = {}
+      OptionParser.new { |parser| parser.on("--to ADDRESS") { |v| opts[:to] = v } }.parse!(@argv)
+      production.mail_test(to: opts[:to])
+    end
+
+    def production
+      @production ||= Production.new(config: @config, repo_root: @repo_root, runner: @runner, logger: $stderr)
+    end
+
+    def deploy_production_alias(target)
+      opts = {}
+      OptionParser.new do |parser|
+        parser.on("--ref REF") { |v| opts[:ref] = v }
+        parser.on("--backend-ref REF") { |v| opts[:backend_ref] = v }
+        parser.on("--frontend-ref REF") { |v| opts[:frontend_ref] = v }
+      end.parse!(@argv)
+      locked { production.deploy(target, backend_ref: opts[:backend_ref] || opts[:ref], frontend_ref: opts[:frontend_ref] || opts[:ref]) }
+    end
+
+    def production_configured?
+      @config.fetch("server")["server_id"].to_s != ""
     end
 
     def locked(&block)

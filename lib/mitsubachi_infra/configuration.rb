@@ -16,6 +16,30 @@ module MitsubachiInfra
         "home" => "/home/deploy",
         "app_root" => "/var/www/mitsubachi"
       },
+      "server" => {
+        "deploy_user" => "deploy",
+        "server_id" => nil
+      },
+      "domains" => {
+        "frontend" => "mitsubachi.shiosalt.com",
+        "api" => "mitsubachi-api.shiosalt.com"
+      },
+      "paths" => {
+        "rails_root" => "/var/www/mitsubachi",
+        "frontend_root" => "/var/www/mitsubachi-frontend",
+        "rails_env" => "/etc/mitsubachi/rails.env",
+        "frontend_env" => "/etc/mitsubachi/frontend.env",
+        "caddyfile" => "/etc/caddy/Caddyfile",
+        "server_id" => "/etc/mitsubachi/server-id"
+      },
+      "ports" => {
+        "rails" => 3000,
+        "http" => 80,
+        "https" => 443,
+        "minecraft" => [25_565, 25_566]
+      },
+      "release_retention" => 5,
+      "acme_email" => nil,
       "backend" => {
         "repository" => "git@github.com:ShioPy0101/mitsubachi-ruby.git",
         "ref" => "main",
@@ -65,6 +89,14 @@ module MitsubachiInfra
       File.join(fetch("deploy").fetch("app_root"), "repositories")
     end
 
+    def production_frontend_url
+      "https://#{data.fetch("domains").fetch("frontend")}"
+    end
+
+    def production_api_url
+      "https://#{data.fetch("domains").fetch("api")}"
+    end
+
     def public?
       fetch("deployment_mode") == "public"
     end
@@ -77,6 +109,7 @@ module MitsubachiInfra
       mode = data["deployment_mode"]
       raise ValidationError, "deployment_mode must be lan or public" unless %w[lan public].include?(mode)
       validate_deploy!
+      validate_production_schema!
       validate_app!("backend")
       validate_app!("frontend")
       validate_frontend!
@@ -131,6 +164,22 @@ module MitsubachiInfra
       raise ValidationError, "https.email is required in public mode" unless email.match?(/\A[^@\s]+@[^@\s]+\.[^@\s]+\z/)
     end
 
+    def validate_production_schema!
+      %w[frontend api].each { |key| validate_public_host!(data.fetch("domains").fetch(key)) }
+      paths = data.fetch("paths")
+      %w[rails_root frontend_root rails_env frontend_env caddyfile server_id].each do |key|
+        value = paths.fetch(key)
+        present!(value, "paths.#{key}")
+        raise ValidationError, "paths.#{key} must be absolute" unless value.start_with?("/")
+        reject_traversal!(value, "paths.#{key}")
+      end
+      ports = data.fetch("ports")
+      %w[rails http https].each { |key| integer_port!(ports.fetch(key), "ports.#{key}") }
+      minecraft = ports.fetch("minecraft")
+      raise ValidationError, "ports.minecraft must be an array" unless minecraft.is_a?(Array)
+      minecraft.each { |port| integer_port!(port, "ports.minecraft") }
+    end
+
     def validate_public_host!(host)
       present!(host, "https.host")
       raise ValidationError, "https.host must not include scheme" if host.include?("://")
@@ -146,6 +195,13 @@ module MitsubachiInfra
 
     def positive_integer!(value, name)
       raise ValidationError, "#{name} must be positive integer" unless value.to_i.positive?
+    end
+
+    def integer_port!(value, name)
+      port = Integer(value)
+      raise ValidationError, "#{name} must be 1..65535" unless port.between?(1, 65_535)
+    rescue ArgumentError, TypeError
+      raise ValidationError, "#{name} must be integer"
     end
 
     def reject_traversal!(value, name)

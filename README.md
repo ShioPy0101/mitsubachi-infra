@@ -1,8 +1,39 @@
 # mitsubachi-infra
 
-`mitsubachi-infra` は、同一ローカルネットワーク内の Ubuntu 24.04 LTS サーバーへ Mitsubachi を LAN HTTP で安全に配置・運用するための Infra リポジトリです。
+`mitsubachi-infra` は、Mitsubachi の本番 Ubuntu 上で Rails API、Solid Queue worker、React/Vite frontend、Caddy、systemd、UFW、release/rollback を管理する Infra リポジトリです。
 
-今回の対象は **LAN 内 HTTP** です。インターネット公開、公開 DNS、Cloudflare、Certbot、公開 HTTPS、Caddy、Docker、Kubernetes、GitHub Actions 自動 deploy は対象外です。
+現行の本番運用は、利用者が本番 Ubuntu へ SSH 接続した後、その本番 Ubuntu 上で Ruby CLI を実行する方式です。`mitsubachi-infra` が開発 Ubuntu から本番 Ubuntu へ SSH 接続する実装は採用しません。
+
+```text
+開発 Ubuntu
+  commit / push
+    ↓
+利用者が本番 Ubuntu へ SSH 接続
+    ↓
+本番 Ubuntu 上で bundle exec ruby exe/mitsubachi-infra deploy
+    ↓
+backend / frontend を Git から取得して release deploy
+```
+
+公開ドメイン:
+
+```text
+Frontend: https://mitsubachi.shiosalt.com
+Rails API: https://mitsubachi-api.shiosalt.com
+```
+
+Caddy が 80/443 を受け、frontend は `/var/www/mitsubachi-frontend/current/dist` から静的配信し、Rails API は `127.0.0.1:3000` の Puma へ reverse proxy します。Minecraft で使用する TCP `25565` / `25566` は UFW 設定で維持し、用途を変更しません。
+
+詳細:
+
+```text
+docs/commands.md
+docs/production-deployment.md
+docs/environment-variables.md
+docs/caddy.md
+docs/mail-delivery.md
+docs/troubleshooting.md
+```
 
 ## リポジトリ責務
 
@@ -22,9 +53,9 @@ git@github.com:ShioPy0101/mitsubachi-front.git
 ```text
 mitsubachi-infra
   Ubuntu 初期構築
-  Nginx
+  Caddy
   systemd
-  LAN 設定
+  UFW
   deploy / rollback
   backup
   運用ドキュメント
@@ -57,7 +88,7 @@ deploy_api.sh の既定 --repo-url
 
 `deploy_api.sh` は Rails API を `/var/www/mitsubachi/repo` へ mirror clone/fetch し、解決した commit SHA から `/var/www/mitsubachi/releases/<release>` を作ります。Infra リポジトリ内へ Rails コードを clone したり、submodule として追加したり、コピーしたりしません。
 
-Frontend は今回未実装です。将来は `git@github.com:ShioPy0101/mitsubachi-front.git` を別手順で build/deploy し、同一 Nginx origin の `/` で公開します。
+Frontend は Ruby CLI の production deploy で `git@github.com:ShioPy0101/mitsubachi-front.git` から取得し、Caddy で静的配信します。
 
 ```text
 http://<ubuntu-private-ip>/
@@ -72,7 +103,7 @@ http://<ubuntu-private-ip>/api/*
 ```text
 LAN client
   -> http://<ubuntu-private-ip>
-  -> Nginx :80
+  -> Caddy :80/:443
   -> Rails / Puma 127.0.0.1:3001
   -> PostgreSQL
 ```
@@ -125,11 +156,11 @@ lib/mitsubachi_infra/configuration.rb
 lib/mitsubachi_infra/deployment/
   backend/frontend release deploy と rollback。
 
-lib/mitsubachi_infra/nginx.rb
-  Nginx ERB template の配置、nginx -t、reload。
+lib/mitsubachi_infra/caddy.rb
+  Caddyfile の生成、validation、reload。
 
-lib/mitsubachi_infra/certbot.rb
-  Nginx + Certbot + Let's Encrypt の HTTP-01 enable/renew。
+lib/mitsubachi_infra/production.rb
+  本番 Ubuntu 上での bootstrap、backend/frontend deploy、rollback、production-check、mail-test。
 ```
 
 設定 schema 例は `env/config.yml.example` を参照してください。非秘密の infra 設定は `/etc/mitsubachi/config.yml` に保存します。Rails secret と DB password を含む値は `/etc/mitsubachi/rails.env` に分離します。frontend env には DB password、Rails master key、secret key base、署名鍵、証明書秘密鍵、ACME credential を置かないでください。
@@ -550,7 +581,7 @@ sudo ./scripts/configure_local_network.sh \
 
 ## Public HTTPS
 
-public mode は Nginx + Certbot + Let's Encrypt で実装します。Caddy は使用しません。
+public mode は Caddy の automatic HTTPS で実装します。証明書の取得・更新は Caddy に任せ、証明書秘密鍵を Git や frontend env に置きません。
 
 `/etc/mitsubachi/config.yml` で `deployment_mode: public`、`https.host`、`https.email` を設定し、先に DNS と port forwarding を確認してください。
 
@@ -562,7 +593,7 @@ sudo mitsubachi-infra https renew
 sudo mitsubachi-infra https status
 ```
 
-HTTPS enable は HTTP-01 challenge 用 Nginx 設定を先に配置し、`nginx -t` 成功後に Certbot を実行します。証明書取得前に存在しない証明書 path を参照する HTTPS 設定へ切り替えません。staging certificate はブラウザで信頼されません。rate limit 回避の検証用として使ってください。
+HTTPS は Caddyfile validation 成功後に reload します。DNS が本番 Ubuntu を指していない場合、Caddy の ACME 証明書取得は失敗します。
 
 router / DNS:
 

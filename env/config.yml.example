@@ -1,4 +1,4 @@
-deployment_mode: lan
+deployment_mode: public
 server_ip: 192.168.1.50
 lan_cidr: 192.168.1.0/24
 
@@ -6,6 +6,33 @@ deploy:
   user: deploy
   home: /home/deploy
   app_root: /var/www/mitsubachi
+
+server:
+  deploy_user: deploy
+  server_id: replace-with-production-server-id
+
+domains:
+  frontend: mitsubachi.shiosalt.com
+  api: mitsubachi-api.shiosalt.com
+
+paths:
+  rails_root: /var/www/mitsubachi
+  frontend_root: /var/www/mitsubachi-frontend
+  rails_env: /etc/mitsubachi/rails.env
+  frontend_env: /etc/mitsubachi/frontend.env
+  caddyfile: /etc/caddy/Caddyfile
+  server_id: /etc/mitsubachi/server-id
+
+ports:
+  rails: 3000
+  http: 80
+  https: 443
+  minecraft:
+    - 25565
+    - 25566
+
+release_retention: 5
+acme_email: admin@shiosalt.com
 
 backend:
   repository: git@github.com:ShioPy0101/mitsubachi-ruby.git
@@ -24,7 +51,7 @@ frontend:
   output_directory: dist
 
 https:
-  host:
-  email:
+  host: mitsubachi.shiosalt.com
+  email: admin@shiosalt.com
   staging: false
   challenge: http-01

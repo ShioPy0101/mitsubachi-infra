@@ -48,7 +48,7 @@ module MitsubachiInfra
       raise Error, "command timed out: #{mask(argv.join(" "))}"
     end
 
-    def deploy(*command, config:, chdir: nil, timeout: 600, allow_failure: false)
+    def deploy(*command, config:, chdir: nil, timeout: 600, allow_failure: false, env: {})
       deploy = config.fetch("deploy")
       home = deploy.fetch("home")
       deploy_path = [
@@ -58,17 +58,18 @@ module MitsubachiInfra
         "/usr/bin",
         "/bin"
       ].join(":")
+      deploy_environment = {
+        "HOME" => home,
+        "USER" => deploy.fetch("user"),
+        "LOGNAME" => deploy.fetch("user"),
+        "RBENV_ROOT" => "#{home}/.rbenv",
+        "PATH" => deploy_path
+      }.merge(env)
       run(*command,
           chdir: chdir || home,
           timeout: timeout,
           user: deploy.fetch("user"),
-          deploy_env: {
-            "HOME" => home,
-            "USER" => deploy.fetch("user"),
-            "LOGNAME" => deploy.fetch("user"),
-            "RBENV_ROOT" => "#{home}/.rbenv",
-            "PATH" => deploy_path
-          },
+          deploy_env: deploy_environment,
           allow_failure: allow_failure)
     end
 

@@ -1,0 +1,37 @@
+{
+	email <%= config.fetch("acme_email") || config.fetch("https")["email"] || "admin@shiosalt.com" %>
+}
+
+<%= config.fetch("domains").fetch("frontend") %> {
+	encode zstd gzip
+
+	root * <%= File.join(config.fetch("paths").fetch("frontend_root"), "current", config.fetch("frontend").fetch("output_directory")) %>
+	try_files {path} /index.html
+	file_server
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	log {
+		output file /var/log/caddy/mitsubachi-frontend-access.log
+	}
+}
+
+<%= config.fetch("domains").fetch("api") %> {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:<%= config.fetch("ports").fetch("rails") %>
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	log {
+		output file /var/log/caddy/mitsubachi-api-access.log
+	}
+}
