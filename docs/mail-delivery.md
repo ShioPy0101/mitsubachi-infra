@@ -8,13 +8,13 @@ Frontend
 Rails API
   -> deliver_later
 Solid Queue database
-  -> mitsubachi-jobs.service
+  -> mitsubachi-worker.service
 ActionMailer::MailDeliveryJob
   -> Resend SMTP/API
   -> Recipient
 ```
 
-`mitsubachi-ruby` では `bin/jobs` が存在し、production の queue adapter は `solid_queue` です。Infra は `mitsubachi-jobs.service` を Puma と分けて起動します。
+`mitsubachi-ruby` では `bin/jobs` が存在し、production の queue adapter は `solid_queue` です。Infra は `mitsubachi-worker.service` を Puma と分けて起動します。
 
 ## Test Mail
 
@@ -26,8 +26,8 @@ ruby exe/mitsubachi-infra mail-test --to test@example.com
 
 ## Checks
 
-* `systemctl status mitsubachi-jobs`
-* `journalctl -u mitsubachi-jobs -n 200 --no-pager`
+* `systemctl status mitsubachi-worker`
+* `journalctl -u mitsubachi-worker -n 200 --no-pager`
 * `RESEND_API_KEY` configured
 * `MAIL_FROM` verified
 * SPF / DKIM / DMARC configured

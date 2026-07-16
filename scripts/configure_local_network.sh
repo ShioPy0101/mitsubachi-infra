@@ -74,8 +74,8 @@ run_or_echo() {
 }
 
 set_stage "nginx config"
-# LAN HTTP の入口は Nginx :80 のみに限定する。Rails/Puma :3001 は
-# localhost bind のままにして、UFW でも 3001 を開けない。ここで扱う
+# LAN HTTP の入口は Nginx :80 のみに限定する。Rails/Puma :3000 は
+# localhost bind のままにして、UFW でも 3000 を開けない。ここで扱う
 # Nginx 設定には HTTPS、証明書、公開 DNS 前提を一切混ぜない。
 log "LAN HTTP 用 Nginx 設定を必要に応じて install します。"
 if [[ "${INSTALL_NGINX}" == true ]]; then
@@ -102,7 +102,7 @@ if [[ "${ENABLE_UFW}" == true ]]; then
   # または明示された SSH CIDR に限定する。
   run_or_echo ufw allow from "${SSH_CIDR}" to any port 22 proto tcp comment "mitsubachi ssh"
   run_or_echo ufw allow from "${LAN_CIDR}" to any port 80 proto tcp comment "mitsubachi local http"
-  # 3001 と 5432 は意図的に許可しない。Rails と PostgreSQL は LAN からも
+  # 3000 と 5432 は意図的に許可しない。Rails と PostgreSQL は LAN からも
   # 直接到達できないことがこの Infra のセキュリティ境界になる。
   run_or_echo ufw --force enable
   log "UFW 適用後の状態を表示します。"

@@ -13,7 +13,7 @@ mitsubachi-infra CLI
     ├─ git clone/fetch mitsubachi-front as deploy
     ├─ Rails/Puma 127.0.0.1:3000
     ├─ Solid Queue worker
-    ├─ Caddy :80/:443
+    ├─ Nginx :80/:443
     └─ UFW keeps 25565/25566
 ```
 
@@ -42,8 +42,8 @@ mitsubachi-infra CLI
 5. backend は bundle install、migration、`bin/jobs` 確認を行う
 6. frontend は `frontend.env` を build 時に読み込み `npm run build` を行う
 7. 成功時だけ `current` を atomic に切り替える
-8. backend は `mitsubachi-api.service` と `mitsubachi-jobs.service` を restart する
-9. Caddy と HTTPS endpoint を確認する
+8. backend は `mitsubachi-api.service` と `mitsubachi-worker.service` を restart する
+9. Nginx と HTTPS endpoint を確認する
 
 ## Human Tasks
 

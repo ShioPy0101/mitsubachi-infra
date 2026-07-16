@@ -14,7 +14,7 @@ Options:
                           Default: git@github.com:ShioPy0101/mitsubachi-ruby.git
   --ref REF               Git ref to deploy. Default: main.
   --keep-releases N       Number of releases to keep. Default: 5.
-  --health-url URL        Ready health URL. Default: http://127.0.0.1:3001/api/health/ready.
+  --health-url URL        Ready health URL. Default: http://127.0.0.1:3000/api/health/ready.
   --skip-migrate          Do not run rails db:migrate.
   --skip-restart          Do not restart systemd service or run post-restart health check.
   --help                  Show this help.
@@ -24,7 +24,7 @@ USAGE
 RAILS_REPO_URL="git@github.com:ShioPy0101/mitsubachi-ruby.git"
 REF="main"
 KEEP_RELEASES=5
-HEALTH_URL="http://127.0.0.1:3001/api/health/ready"
+HEALTH_URL="http://127.0.0.1:3000/api/health/ready"
 SKIP_MIGRATE=false
 SKIP_RESTART=false
 

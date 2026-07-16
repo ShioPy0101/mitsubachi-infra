@@ -1,6 +1,8 @@
 # Caddy
 
-Caddy は本番 Ubuntu でのみ管理します。開発 Ubuntu の `/etc/caddy` は変更しません。
+Caddy は現在の正式構成では使用しません。HTTPS は Nginx + Certbot で管理します。
+
+この文書は将来案または別ブランチで Caddy 移行を検討する場合のメモです。Nginx と Caddy を同時に 80/443 へ bind しないでください。
 
 ## Responsibilities
 

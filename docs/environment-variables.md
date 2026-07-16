@@ -7,6 +7,7 @@
 | `RAILS_ENV` | yes | no | `production` | Rails environment | restart API/jobs |
 | `RACK_ENV` | yes | no | `production` | Rack environment | restart API/jobs |
 | `APP_HOST` | yes | no | `mitsubachi-api.shiosalt.com` | Rails host authorization and URL generation | restart API/jobs |
+| `ALLOWED_HOSTS` | yes | no | `mitsubachi-api.shiosalt.com,127.0.0.1,localhost` | Rails Host Authorization allowlist | restart API/jobs |
 | `FRONTEND_ORIGIN` | yes | no | `https://mitsubachi.shiosalt.com` | CORS / CSRF origin | restart API/jobs |
 | `FRONTEND_URL` | yes | no | `https://mitsubachi.shiosalt.com` | Mail and frontend links | restart API/jobs |
 | `SESSION_COOKIE_SECURE` | yes | no | `true` | Secure Cookie | restart API/jobs |

@@ -12,20 +12,23 @@ Usage: scripts/verify_installation.sh [options]
 Options:
   --server-ip IP           Expected private IPv4 address.
   --lan-cidr CIDR          Expected LAN CIDR for UFW checks.
-  --health-base URL        Base URL. Default: http://127.0.0.1:3001.
+  --health-base URL        Base URL. Default: http://127.0.0.1:3000.
+  --health-host HOST       Host header for Rails Host Authorization.
   --help                   Show this help.
 USAGE
 }
 
 SERVER_IP=""
 LAN_CIDR=""
-HEALTH_BASE="http://127.0.0.1:3001"
+HEALTH_BASE="http://127.0.0.1:3000"
+HEALTH_HOST=""
 
 while (($#)); do
   case "$1" in
     --server-ip) SERVER_IP="${2:-}"; shift 2 ;;
     --lan-cidr) LAN_CIDR="${2:-}"; shift 2 ;;
     --health-base) HEALTH_BASE="${2:-}"; shift 2 ;;
+    --health-host) HEALTH_HOST="${2:-}"; shift 2 ;;
     --help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -61,12 +64,14 @@ else
   fail "/etc/os-release readable"
 fi
 if [[ -n "${SERVER_IP}" ]]; then
+  HEALTH_HOST="${HEALTH_HOST:-${SERVER_IP}}"
   if private_ipv4 "${SERVER_IP}"; then
     pass "server IP は private IPv4"
   else
     fail "server IP は private IPv4"
   fi
 fi
+HEALTH_HOST="${HEALTH_HOST:-mitsubachi-api.shiosalt.com}"
 if [[ -n "${LAN_CIDR}" && -n "${SERVER_IP}" ]]; then
   if cidr_contains_ipv4 "${LAN_CIDR}" "${SERVER_IP}"; then
     pass "server IP は LAN CIDR 内"
@@ -128,8 +133,8 @@ fi
 
 set_stage "ports"
 if command -v ss >/dev/null 2>&1; then
-  if ss -ltnp | grep -E '127\.0\.0\.1:3001|localhost:3001' >/dev/null; then pass "Puma は localhost:3001 で listen"; else warn "Puma localhost:3001 listener が見つかりません。"; fi
-  if ss -ltnp | grep -E '(^|[[:space:]])0\.0\.0\.0:3001|(^|[[:space:]])\[::\]:3001' >/dev/null; then fail "TCP 3001 が外部 bind されています"; else pass "TCP 3001 は外部 bind されていない"; fi
+  if ss -ltnp | grep -E '127\.0\.0\.1:3000|localhost:3000' >/dev/null; then pass "Puma は localhost:3000 で listen"; else warn "Puma localhost:3000 listener が見つかりません。"; fi
+  if ss -ltnp | grep -E '(^|[[:space:]])0\.0\.0\.0:3000|(^|[[:space:]])\[::\]:3000' >/dev/null; then fail "TCP 3000 が外部 bind されています"; else pass "TCP 3000 は外部 bind されていない"; fi
   if ss -ltnp | grep -E '(^|[[:space:]])0\.0\.0\.0:5432|(^|[[:space:]])\[::\]:5432' >/dev/null; then fail "PostgreSQL 5432 が外部 bind されています"; else pass "PostgreSQL 5432 は外部 bind されていない"; fi
 else
   warn "ss が見つからないため port check を skip しました。"
@@ -142,9 +147,9 @@ if command -v nginx >/dev/null 2>&1; then
 fi
 
 set_stage "health"
-if curl -fsS -o /dev/null "${HEALTH_BASE}/api/health/live"; then pass "health live"; else warn "health live に到達できません。"; fi
-if curl -fsS -o /dev/null "${HEALTH_BASE}/api/health/ready"; then pass "health ready"; else warn "health ready に到達できません。"; fi
-code="$(curl -sS -o /dev/null -w '%{http_code}' "${HEALTH_BASE}/internal/storage/drive_items/does-not-exist" || true)"
+if curl -fsS -H "Host: ${HEALTH_HOST}" -o /dev/null "${HEALTH_BASE}/api/health/live"; then pass "health live"; else warn "health live に到達できません。"; fi
+if curl -fsS -H "Host: ${HEALTH_HOST}" -o /dev/null "${HEALTH_BASE}/api/health/ready"; then pass "health ready"; else warn "health ready に到達できません。"; fi
+code="$(curl -sS -H "Host: ${HEALTH_HOST}" -o /dev/null -w '%{http_code}' "${HEALTH_BASE}/internal/storage/drive_items/does-not-exist" || true)"
 case "${code}" in
   403|404) pass "internal URI 直接アクセスは拒否されています (${code})" ;;
   *) warn "internal URI 直接アクセスの応答が ${code} です。Nginx 経由では 403 または 404 を想定します。" ;;
@@ -154,6 +159,9 @@ set_stage "consistency"
 if [[ -f "${REPO_ROOT}/nginx/mitsubachi-local.conf" ]]; then
   if grep -F 'location /internal/storage/drive_items/' "${REPO_ROOT}/nginx/mitsubachi-local.conf" >/dev/null; then pass "Nginx internal URI は Rails 契約と一致"; else fail "Nginx internal URI は Rails 契約と一致"; fi
   if grep -F 'alias /mnt/external-hdd/mitsubachi/files/drive_items/;' "${REPO_ROOT}/nginx/mitsubachi-local.conf" >/dev/null; then pass "Nginx alias は FILE_STORAGE_ROOT と一致"; else fail "Nginx alias は FILE_STORAGE_ROOT と一致"; fi
+fi
+if [[ -f /etc/nginx/sites-available/mitsubachi.conf ]]; then
+  if grep -F "proxy_pass http://127.0.0.1:3000;" /etc/nginx/sites-available/mitsubachi.conf >/dev/null; then pass "Nginx proxy_pass は Puma 3000 と一致"; else fail "Nginx proxy_pass は Puma 3000 と一致"; fi
 fi
 if [[ -f "${REPO_ROOT}/systemd/mitsubachi-api.service" ]]; then
   if grep -F 'WorkingDirectory=/var/www/mitsubachi/current' "${REPO_ROOT}/systemd/mitsubachi-api.service" >/dev/null; then pass "systemd WorkingDirectory は current symlink と一致"; else fail "systemd WorkingDirectory は current symlink と一致"; fi

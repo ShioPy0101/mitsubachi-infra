@@ -11,7 +11,7 @@ Usage: scripts/rollback_api.sh [release-name] [options]
 
 Options:
   --list                  List available releases and exit.
-  --health-url URL        Ready health URL. Default: http://127.0.0.1:3001/api/health/ready.
+  --health-url URL        Ready health URL. Default: http://127.0.0.1:3000/api/health/ready.
   --skip-restart          Only switch current symlink; do not restart or health check.
   --help                  Show this help.
 USAGE
@@ -19,7 +19,7 @@ USAGE
 
 TARGET=""
 LIST=false
-HEALTH_URL="http://127.0.0.1:3001/api/health/ready"
+HEALTH_URL="http://127.0.0.1:3000/api/health/ready"
 SKIP_RESTART=false
 
 while (($#)); do

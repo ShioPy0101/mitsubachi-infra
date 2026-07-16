@@ -1,11 +1,11 @@
 # Troubleshooting
 
-## Caddy
+## Nginx
 
 ```bash
-systemctl status caddy
-journalctl -u caddy -n 200 --no-pager
-caddy validate --config /etc/caddy/Caddyfile
+systemctl status nginx
+journalctl -u nginx -n 200 --no-pager
+nginx -t
 ```
 
 ## Rails API
@@ -13,15 +13,15 @@ caddy validate --config /etc/caddy/Caddyfile
 ```bash
 systemctl status mitsubachi-api
 journalctl -u mitsubachi-api -n 200 --no-pager
-curl http://127.0.0.1:3000/api/health
-curl -I https://mitsubachi-api.shiosalt.com/api/health
+curl -H 'Host: mitsubachi-api.shiosalt.com' http://127.0.0.1:3000/api/health/ready
+curl -I https://mitsubachi-api.shiosalt.com/api/health/ready
 ```
 
 ## Solid Queue
 
 ```bash
-systemctl status mitsubachi-jobs
-journalctl -u mitsubachi-jobs -n 200 --no-pager
+systemctl status mitsubachi-worker
+journalctl -u mitsubachi-worker -n 200 --no-pager
 ```
 
 ## Frontend
@@ -45,11 +45,11 @@ Common causes:
 
 * DNS A/AAAA record does not point to production IP
 * router does not forward 80/443
-* Caddy cannot read frontend `dist`
+* Nginx cannot read frontend `dist`
 * Rails is not listening on `127.0.0.1:3000`
 * `rails.env` is missing required DB URLs or Resend variables
 * frontend was not rebuilt after `VITE_API_BASE_URL` change
 * CORS or Cookie Secure settings do not match separate frontend/API domains
-* `mitsubachi-jobs.service` is stopped, so `deliver_later` is queued but not delivered
+* `mitsubachi-worker.service` is stopped, so `deliver_later` is queued but not delivered
 * Resend API key invalid or `MAIL_FROM` is not verified
 * `sudo bundle exec` is used instead of deploy-user rbenv path through systemd

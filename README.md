@@ -30,7 +30,6 @@ Nginx が 80/443 を受け、frontend は `/var/www/mitsubachi-frontend/current/
 docs/commands.md
 docs/production-deployment.md
 docs/environment-variables.md
-docs/caddy.md
 docs/mail-delivery.md
 docs/troubleshooting.md
 ```
@@ -236,36 +235,21 @@ lib/mitsubachi_infra/production.rb
 
 設定 schema 例は `env/config.yml.example` を参照してください。非秘密の infra 設定は `/etc/mitsubachi/config.yml` に保存します。Rails secret と DB password を含む値は `/etc/mitsubachi/rails.env` に分離します。frontend env には DB password、Rails master key、secret key base、署名鍵、証明書秘密鍵、ACME credential を置かないでください。
 
-新しい release directory は次を基本形にします。
-
-```text
-/var/www/mitsubachi/
-├── backend/
-│   ├── current -> releases/<release-id>
-│   ├── releases/
-│   └── shared/
-├── frontend/
-│   ├── current -> releases/<release-id>
-│   ├── releases/
-│   └── shared/
-└── repositories/
-```
-
-既存の `/var/www/mitsubachi/current` は無条件削除しません。移行時は既存 release と shared data を確認し、必要なら backend/current へ手動で移した後に Ruby CLI deploy を開始してください。
-
 ## 正式なディレクトリ設計
 
 この節のパスを正式な設計として採用します。README、シェルスクリプト、Nginx 設定、systemd unit、環境変数雛形、テストはこの構成に揃えています。
 
 ```text
-/var/www/mitsubachi
-├── repo
-├── releases
-├── current -> releases/<release-name>
-└── shared
-    ├── log
-    ├── tmp
-    └── deployments.log
+Backend:
+  /var/www/mitsubachi/repo
+  /var/www/mitsubachi/releases
+  /var/www/mitsubachi/current -> releases/<release-name>
+  /var/www/mitsubachi/shared
+
+Frontend:
+  /var/www/mitsubachi-frontend/repo
+  /var/www/mitsubachi-frontend/releases
+  /var/www/mitsubachi-frontend/current -> releases/<release-name>
 ```
 
 各ディレクトリの責務:
@@ -648,11 +632,11 @@ sudo ./scripts/configure_local_network.sh \
   --dry-run
 ```
 
-`0.0.0.0/0` は拒否します。TCP 80 は指定 LAN CIDR からのみ許可します。TCP 22 は LAN CIDR または `--ssh-cidr` からのみ許可します。TCP 3001 と 5432 は許可しません。UFW reset は行いません。
+`0.0.0.0/0` は拒否します。TCP 80 は指定 LAN CIDR からのみ許可します。TCP 22 は LAN CIDR または `--ssh-cidr` からのみ許可します。TCP 3000 と 5432 は許可しません。UFW reset は行いません。
 
 ## Public HTTPS
 
-public mode は Caddy の automatic HTTPS で実装します。証明書の取得・更新は Caddy に任せ、証明書秘密鍵を Git や frontend env に置きません。
+public mode は Nginx の automatic HTTPS で実装します。証明書の取得・更新は Nginx に任せ、証明書秘密鍵を Git や frontend env に置きません。
 
 `/etc/mitsubachi/config.yml` で `deployment_mode: public`、`https.host`、`https.email` を設定し、先に DNS と port forwarding を確認してください。
 
@@ -664,7 +648,7 @@ sudo mitsubachi-infra https renew
 sudo mitsubachi-infra https status
 ```
 
-HTTPS は Caddyfile validation 成功後に reload します。DNS が本番 Ubuntu を指していない場合、Caddy の ACME 証明書取得は失敗します。
+HTTPS は `nginx -t` 成功後に reload します。DNS が本番 Ubuntu を指していない場合、Certbot の ACME 証明書取得は失敗します。
 
 router / DNS:
 
@@ -710,10 +694,17 @@ sudoedit /etc/mitsubachi/rails.env
 
 ```text
 APP_HOST
-  Ubuntu サーバーの固定 private IP。例: 192.168.1.50
+  単一の Rails application host。public mode は mitsubachi-api.shiosalt.com、
+  LAN mode は Ubuntu サーバーの固定 private IP。例: 192.168.1.50
+
+ALLOWED_HOSTS
+  Rails Host Authorization 用のカンマ区切り allowlist。
+  public mode: mitsubachi-api.shiosalt.com,127.0.0.1,localhost
+  LAN mode: <server-private-ip>,127.0.0.1,localhost
 
 FRONTEND_ORIGIN / FRONTEND_URL
-  LAN HTTP の同一 origin。例: http://192.168.1.50
+  public mode は https://mitsubachi.shiosalt.com。
+  LAN mode は LAN HTTP の同一 origin。例: http://192.168.1.50
 
 FILE_STORAGE_ROOT
   /mnt/external-hdd/mitsubachi/files
@@ -743,6 +734,26 @@ RESEND_API_KEY / MAIL_FROM
 `/etc/mitsubachi/rails.env` の推奨 owner/group/mode は `root:deploy 0640` です。4 つの `DATABASE*_URL`、`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`RESEND_API_KEY` は標準出力やログへ表示しません。単一 `DATABASE_URL` だけの旧構成は Rails production 起動前に停止します。
 
 この Infra は Rails code を変更しません。`SESSION_COOKIE_SECURE=false` を Rails が参照していない場合、または production で `secure: true` が固定されている場合、LAN HTTP では Cookie session が送信されず認証できません。これは `mitsubachi-ruby` 側の確認・修正事項です。公開 HTTPS へ移行する時は Secure Cookie を必須へ戻してください。
+
+Rails 側が `ALLOWED_HOSTS` を参照していない場合は、`mitsubachi-ruby` 側で `config.hosts` に `ENV["ALLOWED_HOSTS"].split(",")` を追加する必要があります。`config.hosts.clear` は使いません。確認例:
+
+```bash
+sudo -u deploy -H env \
+  HOME=/home/deploy \
+  RBENV_ROOT=/home/deploy/.rbenv \
+  PATH=/home/deploy/.rbenv/bin:/home/deploy/.rbenv/shims:/usr/local/bin:/usr/bin:/bin \
+  bash -lc '
+    set -a
+    source /etc/mitsubachi/rails.env
+    set +a
+    cd /var/www/mitsubachi/current
+    bundle exec rails runner "
+      puts ENV[\"APP_HOST\"].inspect
+      puts ENV[\"ALLOWED_HOSTS\"].inspect
+      pp Rails.application.config.hosts
+    "
+  '
+```
 
 ## Cookie / CSRF
 
@@ -841,7 +852,7 @@ release 名は basename のみ許可します。`/`、`\`、`..`、空白、NUL�
 
 ```text
 /api/
-  -> http://127.0.0.1:3001
+  -> http://127.0.0.1:3000
 
 /internal/storage/drive_items/
   internal
@@ -882,7 +893,8 @@ verify script:
 sudo ./scripts/verify_installation.sh \
   --server-ip 192.168.1.50 \
   --lan-cidr 192.168.1.0/24 \
-  --health-base http://127.0.0.1:3001
+  --health-base http://127.0.0.1:3000 \
+  --health-host 192.168.1.50
 ```
 
 curl:
@@ -983,7 +995,7 @@ upload 中の完全な snapshot consistency は保証しません。厳密な同
 3. environment file: `/etc/mitsubachi/rails.env` の存在と `root:deploy 0640`
 4. PostgreSQL: `sudo systemctl status postgresql`
 5. Rails boot: `sudo -u deploy env HOME=/home/deploy RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/bin:/home/deploy/.rbenv/shims:/usr/local/bin:/usr/bin:/bin bash -lc 'cd /var/www/mitsubachi/current && bundle exec rails runner "puts :ok"'`
-6. Puma localhost health: `curl -i http://127.0.0.1:3001/api/health/ready`
+6. Puma localhost health: `curl -i -H 'Host: <server-ip>' http://127.0.0.1:3000/api/health/ready`
 7. systemd: `sudo journalctl -u mitsubachi-api -n 200 --no-pager`
 8. Nginx config: `sudo nginx -t`
 9. Nginx proxy: `curl -i http://<server-ip>/api/health/ready`
@@ -996,7 +1008,7 @@ upload 中の完全な snapshot consistency は保証しません。厳密な同
 ## Security
 
 ```text
-Rails 3001
+Rails 3000
   127.0.0.1 bind。LAN へ公開しない。
 
 PostgreSQL 5432
@@ -1023,7 +1035,7 @@ UFW
 
 ## 将来 HTTPS 公開へ移行する時
 
-今回の LAN HTTP 構成に、公開 DNS、Certbot、Cloudflare、Caddy、公開 HTTPS の設定を混ぜないでください。公開 HTTPS へ移行する場合は、別の変更として以下を再設計します。
+正式な公開 HTTPS 構成は Nginx + Certbot です。Caddy は将来案または別ブランチの設計として扱い、Nginx と Caddy を同時に 80/443 へ bind しません。
 
 ```text
 public DNS
