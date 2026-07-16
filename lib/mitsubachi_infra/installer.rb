@@ -3,6 +3,7 @@
 require 'English'
 require 'erb'
 require 'fileutils'
+require 'securerandom'
 require 'time'
 require 'yaml'
 require_relative 'atomic_writer'
@@ -58,7 +59,8 @@ module MitsubachiInfra
     private
 
     def install_cli
-      release = File.join(@cli_root, 'releases', Time.now.utc.strftime('%Y%m%dT%H%M%SZ') + "-#{$PROCESS_ID}")
+      release = File.join(@cli_root, 'releases',
+                          "#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}-#{$PROCESS_ID}-#{SecureRandom.hex(3)}")
       tmp = "#{release}.tmp"
       current_tmp = File.join(@cli_root, ".current.tmp.#{$PROCESS_ID}")
       link_tmp = "#{@cli_link}.tmp.#{$PROCESS_ID}"
@@ -79,16 +81,33 @@ module MitsubachiInfra
       FileUtils.mkdir_p(File.join(@cli_root, 'releases'))
       FileUtils.mv(tmp, release)
       @runner.run('chown', '-R', 'root:root', release) if Process.euid.zero?
-      FileUtils.ln_sf(release, current_tmp)
-      FileUtils.mv(current_tmp, File.join(@cli_root, 'current'), force: true)
-      FileUtils.ln_sf(File.join(@cli_root, 'current', 'bin', 'mitsubachi-infra'), link_tmp)
-      FileUtils.mv(link_tmp, @cli_link, force: true)
+      assert_replaceable_cli_link!(File.join(@cli_root, 'current'), label: 'CLI current')
+      assert_replaceable_cli_link!(@cli_link, label: 'CLI executable')
+      atomic_replace_symlink(current_tmp, File.join(@cli_root, 'current'), release, label: 'CLI current')
+      atomic_replace_symlink(link_tmp, @cli_link, File.join(@cli_root, 'current', 'bin', 'mitsubachi-infra'),
+                             label: 'CLI executable')
     rescue StandardError
       FileUtils.rm_rf(tmp) if tmp
       FileUtils.rm_rf(release) if release && !File.symlink?(File.join(@cli_root, 'current'))
       FileUtils.rm_f(current_tmp) if current_tmp
       FileUtils.rm_f(link_tmp) if link_tmp
       raise
+    end
+
+    def atomic_replace_symlink(temporary_link, path, target, label:)
+      assert_replaceable_cli_link!(path, label: label)
+      FileUtils.rm_f(temporary_link)
+      File.symlink(target, temporary_link)
+      File.rename(temporary_link, path)
+    ensure
+      FileUtils.rm_f(temporary_link) if temporary_link
+    end
+
+    def assert_replaceable_cli_link!(path, label:)
+      return unless File.exist?(path) || File.symlink?(path)
+      return if File.symlink?(path)
+
+      raise Error, "#{label} path exists and is not a symlink: #{path}. Move it aside manually before reinstalling."
     end
 
     def install_directories
