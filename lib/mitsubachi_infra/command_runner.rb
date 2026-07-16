@@ -63,6 +63,10 @@ module MitsubachiInfra
       result
     rescue Timeout::Error
       raise Error, "command timed out after #{timeout}s: #{mask(argv.join(' '))}"
+    rescue Errno::ENOENT => e
+      return Result.new(stdout: '', stderr: e.message, status: 127) if allow_failure
+
+      raise Error, "command not found: #{mask(argv.join(' '))}\nstderr=#{mask(e.message)}"
     end
 
     def deploy(*command, config:, chdir: nil, timeout: 600, allow_failure: false, env: {})

@@ -9,7 +9,7 @@ module MitsubachiInfra
     CONFIG_PATH = '/etc/mitsubachi/config.yml'
     DEFAULT = {
       'deployment_mode' => 'lan',
-      'server_ip' => '192.168.1.50',
+      'server_ip' => nil,
       'lan_cidr' => '192.168.1.0/24',
       'deploy' => {
         'user' => 'deploy',
@@ -70,10 +70,10 @@ module MitsubachiInfra
 
     attr_reader :path, :data
 
-    def initialize(path = CONFIG_PATH, data: nil)
+    def initialize(path = CONFIG_PATH, data: nil, validate: true)
       @path = path
       @data = deep_merge(DEFAULT, data || load_file(path))
-      validate!
+      validate! if validate
     end
 
     def [](key)
@@ -140,6 +140,7 @@ module MitsubachiInfra
       mode = data['deployment_mode']
       raise ValidationError, 'deployment_mode must be lan or public' unless %w[lan public].include?(mode)
 
+      validate_mode_specific!
       validate_deploy!
       validate_production_schema!
       validate_app!('backend')
@@ -147,6 +148,22 @@ module MitsubachiInfra
       validate_frontend!
       validate_https!
       true
+    end
+
+    def missing_required_settings
+      missing = []
+      mode = data['deployment_mode'].to_s
+      missing << 'deployment_mode' unless %w[lan public].include?(mode)
+      missing << 'server_ip' if mode == 'lan' && data['server_ip'].to_s.empty?
+      missing << 'https.email' if mode == 'public' && data.fetch('https').fetch('email').to_s.empty?
+      missing
+    end
+
+    def set(path, value)
+      keys = path.split('.')
+      target = data
+      keys[0...-1].each { |key| target = target.fetch(key) }
+      target[keys.last] = value
     end
 
     private
@@ -167,6 +184,13 @@ module MitsubachiInfra
       deploy = data.fetch('deploy')
       %w[user home app_root].each { |key| present!(deploy[key], "deploy.#{key}") }
       reject_traversal!(deploy['app_root'], 'deploy.app_root')
+    end
+
+    def validate_mode_specific!
+      if lan?
+        present!(data['server_ip'], 'server_ip')
+        raise ValidationError, 'server_ip must be private IPv4 in lan mode' unless private_ipv4?(data['server_ip'])
+      end
     end
 
     def validate_app!(name)
@@ -260,6 +284,17 @@ module MitsubachiInfra
     def ip_address?(value)
       IPAddr.new(value)
       true
+    rescue IPAddr::InvalidAddressError
+      false
+    end
+
+    def private_ipv4?(value)
+      address = IPAddr.new(value)
+      address.ipv4? && (
+        IPAddr.new('10.0.0.0/8').include?(address) ||
+        IPAddr.new('172.16.0.0/12').include?(address) ||
+        IPAddr.new('192.168.0.0/16').include?(address)
+      )
     rescue IPAddr::InvalidAddressError
       false
     end

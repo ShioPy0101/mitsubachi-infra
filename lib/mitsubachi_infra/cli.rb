@@ -28,13 +28,26 @@ module MitsubachiInfra
     def run
       parse_global!
       command = @argv.shift || 'help'
-      @config = Configuration.new(@options[:config])
+      if %w[help --help -h].include?(command)
+        puts usage
+        return 0
+      end
+      require_root_for!(command, @argv)
+      @config = Configuration.new(@options[:config], validate: false)
       @runner = CommandRunner.new(logger: $stderr, dry_run: @options[:dry_run])
       case command
-      when 'bootstrap' then locked { production.bootstrap }
-      when 'configure' then locked { production.bootstrap }
-      when 'production-check' then production.production_check
-      when 'doctor' then production.doctor
+      when 'bootstrap'
+        @config.validate!
+        locked { production.bootstrap }
+      when 'configure'
+        @config.validate!
+        locked { production.bootstrap }
+      when 'production-check'
+        @config.validate!
+        production.production_check
+      when 'doctor'
+        @config.validate!
+        production.doctor
       when 'mail-test' then mail_test
       when 'redeploy' then deploy_production_alias('all')
       when 'deploy-backend' then deploy_production_alias('backend')
@@ -48,7 +61,6 @@ module MitsubachiInfra
       when 'rollback' then rollback
       when 'status' then status
       when 'https' then https
-      when 'help', '--help', '-h' then puts usage
       else raise ValidationError, "unknown command: #{command}"
       end
       0
@@ -82,6 +94,7 @@ module MitsubachiInfra
     end
 
     def deploy
+      @config.validate!
       target = @argv.first && !@argv.first.start_with?('-') ? @argv.shift : 'all'
       opts = {}
       OptionParser.new do |parser|
@@ -114,6 +127,7 @@ module MitsubachiInfra
     end
 
     def rollback
+      @config.validate!
       target = @argv.first && !@argv.first.start_with?('-') ? @argv.shift : 'all'
       OptionParser.new.parse!(@argv)
       if production_configured?
@@ -124,6 +138,7 @@ module MitsubachiInfra
     end
 
     def status
+      @config.validate!
       opts = { json: false }
       OptionParser.new { |parser| parser.on('--json') { opts[:json] = true } }.parse!(@argv)
       Status.new(config: @config, runner: @runner, systemd: Systemd.new(runner: @runner),
@@ -134,6 +149,7 @@ module MitsubachiInfra
       sub = @argv.shift || 'status'
       opts = { staging: false }
       OptionParser.new { |parser| parser.on('--staging') { opts[:staging] = true } }.parse!(@argv)
+      @config.validate!
       nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
       certbot = Certbot.new(config: @config, runner: @runner, nginx: nginx, health: HealthCheck.new(logger: $stderr))
       case sub
@@ -167,6 +183,7 @@ module MitsubachiInfra
     end
 
     def mail_test
+      @config.validate!
       opts = {}
       OptionParser.new { |parser| parser.on('--to ADDRESS') { |v| opts[:to] = v } }.parse!(@argv)
       production.mail_test(to: opts[:to])
@@ -177,6 +194,7 @@ module MitsubachiInfra
     end
 
     def deploy_production_alias(target)
+      @config.validate!
       opts = {}
       OptionParser.new do |parser|
         parser.on('--ref REF') { |v| opts[:ref] = v }
@@ -191,6 +209,22 @@ module MitsubachiInfra
 
     def production_configured?
       @config.fetch('server')['server_id'].to_s != ''
+    end
+
+    def require_root_for!(command, argv)
+      return if Process.euid.zero?
+
+      return unless root_required?(command, argv)
+
+      hint = command == 'https' ? "sudo mitsubachi-infra https #{argv.first || 'enable'}" : "sudo mitsubachi-infra #{command}"
+      raise ValidationError, "#{command} must be run as root\nhint: #{hint}"
+    end
+
+    def root_required?(command, argv)
+      return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test].include?(command)
+      return false unless command == 'https'
+
+      %w[enable renew].include?(argv.first || 'status')
     end
 
     def locked(&block)
