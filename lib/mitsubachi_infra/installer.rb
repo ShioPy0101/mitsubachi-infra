@@ -59,11 +59,18 @@ module MitsubachiInfra
     private
 
     def install_cli
+      stamp = "#{$PROCESS_ID}-#{SecureRandom.hex(3)}"
       release = File.join(@cli_root, 'releases',
-                          "#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}-#{$PROCESS_ID}-#{SecureRandom.hex(3)}")
+                          "#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}-#{stamp}")
       tmp = "#{release}.tmp"
-      current_tmp = File.join(@cli_root, ".current.tmp.#{$PROCESS_ID}")
-      link_tmp = "#{@cli_link}.tmp.#{$PROCESS_ID}"
+      current_path = File.join(@cli_root, 'current')
+      current_tmp = File.join(@cli_root, ".current.tmp.#{stamp}")
+      link_tmp = "#{@cli_link}.tmp.#{stamp}"
+      previous_current_target = readlink(current_path)
+      previous_cli_link_target = readlink(@cli_link)
+      release_created = false
+      current_switched = false
+      cli_link_switched = false
 
       if @runner.dry_run
         @runner.run('install', '-d', '-o', 'root', '-g', 'root', '-m', '0755', File.dirname(@cli_root), @cli_root,
@@ -80,15 +87,21 @@ module MitsubachiInfra
       FileUtils.cp_r(File.join(@repo_root, 'lib', 'mitsubachi_infra'), File.join(tmp, 'lib'))
       FileUtils.mkdir_p(File.join(@cli_root, 'releases'))
       FileUtils.mv(tmp, release)
+      release_created = true
       @runner.run('chown', '-R', 'root:root', release) if Process.euid.zero?
-      assert_replaceable_cli_link!(File.join(@cli_root, 'current'), label: 'CLI current')
+      assert_replaceable_cli_link!(current_path, label: 'CLI current')
       assert_replaceable_cli_link!(@cli_link, label: 'CLI executable')
-      atomic_replace_symlink(current_tmp, File.join(@cli_root, 'current'), release, label: 'CLI current')
+      atomic_replace_symlink(current_tmp, current_path, release, label: 'CLI current')
+      current_switched = true
       atomic_replace_symlink(link_tmp, @cli_link, File.join(@cli_root, 'current', 'bin', 'mitsubachi-infra'),
                              label: 'CLI executable')
+      cli_link_switched = true
     rescue StandardError
       FileUtils.rm_rf(tmp) if tmp
-      FileUtils.rm_rf(release) if release && !File.symlink?(File.join(@cli_root, 'current'))
+      unless cli_link_switched
+        restore_symlink(current_path, previous_current_target, current_tmp) if current_switched
+        FileUtils.rm_rf(release) if release_created && !symlink_points_to?(current_path, release)
+      end
       FileUtils.rm_f(current_tmp) if current_tmp
       FileUtils.rm_f(link_tmp) if link_tmp
       raise
@@ -108,6 +121,26 @@ module MitsubachiInfra
       return if File.symlink?(path)
 
       raise Error, "#{label} path exists and is not a symlink: #{path}. Move it aside manually before reinstalling."
+    end
+
+    def readlink(path)
+      File.symlink?(path) ? File.readlink(path) : nil
+    end
+
+    def restore_symlink(path, target, temporary_link)
+      FileUtils.rm_f(temporary_link)
+      if target
+        File.symlink(target, temporary_link)
+        File.rename(temporary_link, path)
+      else
+        FileUtils.rm_f(path)
+      end
+    ensure
+      FileUtils.rm_f(temporary_link) if temporary_link
+    end
+
+    def symlink_points_to?(path, target)
+      File.symlink?(path) && File.readlink(path) == target
     end
 
     def install_directories

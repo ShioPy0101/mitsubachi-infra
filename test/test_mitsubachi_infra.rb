@@ -362,11 +362,15 @@ class MitsubachiInfraTest < Minitest::Test
   end
 
   def patch_file_singleton(method_name, replacement)
-    singleton = File.singleton_class
+    patch_singleton(File, method_name, replacement) { yield }
+  end
+
+  def patch_singleton(receiver, method_name, replacement)
+    singleton = receiver.singleton_class
     original_name = :"mitsubachi_original_#{method_name}"
     singleton.alias_method(original_name, method_name)
-    original = File.method(original_name)
-    File.define_singleton_method(method_name) do |*args|
+    original = receiver.method(original_name)
+    receiver.define_singleton_method(method_name) do |*args|
       replacement.call(original, *args)
     end
     yield
@@ -375,6 +379,10 @@ class MitsubachiInfraTest < Minitest::Test
       singleton.alias_method(method_name, original_name)
       singleton.remove_method(original_name)
     end
+  end
+
+  def with_fixed_random_hex(value)
+    patch_singleton(SecureRandom, :hex, ->(_original, _length = nil) { value }) { yield }
   end
 
   def capture_health_request
@@ -780,6 +788,7 @@ class MitsubachiInfraTest < Minitest::Test
       old = File.join(cli_root, 'releases', 'old')
       FileUtils.mkdir_p(File.join(old, 'bin'))
       File.write(File.join(old, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.chmod(0o755, File.join(old, 'bin', 'mitsubachi-infra'))
       FileUtils.mkdir_p(File.dirname(cli_link))
       FileUtils.ln_sf(old, File.join(cli_root, 'current'))
       FileUtils.ln_sf(File.join(old, 'bin', 'mitsubachi-infra'), cli_link)
@@ -799,6 +808,7 @@ class MitsubachiInfraTest < Minitest::Test
       old = File.join(cli_root, 'releases', 'old')
       FileUtils.mkdir_p(File.join(old, 'bin'))
       File.write(File.join(old, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.chmod(0o755, File.join(old, 'bin', 'mitsubachi-infra'))
       FileUtils.mkdir_p(File.dirname(cli_link))
       FileUtils.ln_sf(old, File.join(cli_root, 'current'))
       FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
@@ -816,14 +826,20 @@ class MitsubachiInfraTest < Minitest::Test
     Dir.mktmpdir do |dir|
       cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
       cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
-      stale = "#{cli_link}.tmp.#{$PROCESS_ID}"
+      stale = "#{cli_link}.tmp.#{$PROCESS_ID}-fixed"
+      current_stale = File.join(cli_root, ".current.tmp.#{$PROCESS_ID}-fixed")
+      FileUtils.mkdir_p(cli_root)
       FileUtils.mkdir_p(File.dirname(cli_link))
       FileUtils.ln_sf('/tmp/old-target', stale)
+      FileUtils.ln_sf('/tmp/old-current', current_stale)
 
-      MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
-                                     repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+      with_fixed_random_hex('fixed') do
+        MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                       repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+      end
 
       refute File.symlink?(stale)
+      refute File.symlink?(current_stale)
       assert File.symlink?(cli_link)
     end
   end
@@ -851,7 +867,7 @@ class MitsubachiInfraTest < Minitest::Test
       end
 
       assert_equal original_link, File.readlink(cli_link)
-      refute File.symlink?("#{cli_link}.tmp.#{$PROCESS_ID}")
+      assert_empty Dir.glob("#{cli_link}.tmp.*")
     end
   end
 
@@ -867,7 +883,7 @@ class MitsubachiInfraTest < Minitest::Test
       FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
       original_link = File.readlink(cli_link)
       patch_file_singleton(:symlink, lambda do |original, target, link|
-        raise Errno::EACCES, 'symlink failed' if link == "#{cli_link}.tmp.#{$PROCESS_ID}"
+        raise Errno::EACCES, 'symlink failed' if link.start_with?("#{cli_link}.tmp.")
 
         original.call(target, link)
       end) do
@@ -878,7 +894,63 @@ class MitsubachiInfraTest < Minitest::Test
       end
 
       assert_equal original_link, File.readlink(cli_link)
-      refute File.symlink?("#{cli_link}.tmp.#{$PROCESS_ID}")
+      assert_empty Dir.glob("#{cli_link}.tmp.*")
+    end
+  end
+
+  def test_cli_install_current_rename_failure_cleans_unused_release
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      old = File.join(cli_root, 'releases', 'old')
+      FileUtils.mkdir_p(File.join(old, 'bin'))
+      File.write(File.join(old, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      FileUtils.ln_sf(old, File.join(cli_root, 'current'))
+      FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
+      patch_file_singleton(:rename, lambda do |original, source, dest|
+        raise ArgumentError, 'current rename failed' if dest == File.join(cli_root, 'current')
+
+        original.call(source, dest)
+      end) do
+        assert_raises(ArgumentError) do
+          MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                         repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+        end
+      end
+
+      assert_equal old, File.realpath(File.join(cli_root, 'current'))
+      assert system(RbConfig.ruby, cli_link, 'help', out: File::NULL, err: File::NULL)
+      assert_equal [old], Dir.glob(File.join(cli_root, 'releases', '*')).select { |path| File.directory?(path) }
+    end
+  end
+
+  def test_cli_install_restores_current_after_cli_link_rename_failure
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      old = File.join(cli_root, 'releases', 'old')
+      FileUtils.mkdir_p(File.join(old, 'bin'))
+      File.write(File.join(old, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      FileUtils.ln_sf(old, File.join(cli_root, 'current'))
+      FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
+      original_cli_link = File.readlink(cli_link)
+      patch_file_singleton(:rename, lambda do |original, source, dest|
+        raise ArgumentError, 'cli link rename failed' if dest == cli_link
+
+        original.call(source, dest)
+      end) do
+        assert_raises(ArgumentError) do
+          MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                         repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+        end
+      end
+
+      assert_equal old, File.realpath(File.join(cli_root, 'current'))
+      assert_equal original_cli_link, File.readlink(cli_link)
+      assert system(RbConfig.ruby, cli_link, 'help', out: File::NULL, err: File::NULL)
+      assert_equal [old], Dir.glob(File.join(cli_root, 'releases', '*')).select { |path| File.directory?(path) }
     end
   end
 
@@ -919,6 +991,42 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_cli_install_replaces_broken_current_symlink
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      FileUtils.mkdir_p(cli_root)
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      File.symlink('/missing/current-release', File.join(cli_root, 'current'))
+
+      MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                     repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+
+      assert File.symlink?(File.join(cli_root, 'current'))
+      assert File.exist?(File.realpath(File.join(cli_root, 'current')))
+      assert_equal File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), File.readlink(cli_link)
+    end
+  end
+
+  def test_cli_install_rejects_existing_current_directory
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      current = File.join(cli_root, 'current')
+      FileUtils.mkdir_p(current)
+      FileUtils.mkdir_p(File.dirname(cli_link))
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                       repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+      end
+
+      assert_includes error.message, 'CLI current path exists and is not a symlink'
+      assert_path_exists current
+      assert_empty Dir.glob(File.join(cli_root, 'releases', '*')).select { |path| File.directory?(path) }
+    end
+  end
+
   def test_cli_install_dry_run_does_not_change_files
     Dir.mktmpdir do |dir|
       cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
@@ -930,6 +1038,41 @@ class MitsubachiInfraTest < Minitest::Test
 
       refute_path_exists cli_root
       refute_path_exists cli_link
+    end
+  end
+
+  def test_cli_install_generated_release_does_not_use_fileutils_mv_for_symlink_switch
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      FileUtils.mkdir_p(File.dirname(cli_link))
+
+      MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                     repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+
+      generated = File.read(Dir.glob(File.join(cli_root, 'releases', '*', 'lib', 'mitsubachi_infra',
+                                               'installer.rb')).first)
+      refute_includes generated, 'FileUtils.mv(current_tmp'
+      refute_includes generated, 'FileUtils.mv(link_tmp'
+      assert_includes generated, 'File.rename(temporary_link, path)'
+      assert_includes generated, 'FileUtils.mv(tmp, release)'
+    end
+  end
+
+  def test_fileutils_mv_reproduces_same_file_for_symlinks_but_file_rename_succeeds
+    Dir.mktmpdir do |dir|
+      target = File.join(dir, 'target')
+      source = File.join(dir, 'source-link')
+      destination = File.join(dir, 'destination-link')
+      File.write(target, 'ok')
+      File.symlink(target, source)
+      File.symlink(target, destination)
+
+      assert_raises(ArgumentError) { FileUtils.mv(source, destination, force: true) }
+      assert File.symlink?(source)
+      File.rename(source, destination)
+
+      assert_equal target, File.readlink(destination)
     end
   end
 
