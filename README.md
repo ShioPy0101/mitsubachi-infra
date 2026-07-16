@@ -143,7 +143,13 @@ sudo mitsubachi-infra https status
 
 `--dry-run` は `install`、`deploy`、`rollback`、`https enable` などで利用できます。dry-run でも secret は表示しません。
 
-初回 install は root 権限で OS パッケージ、deploy ユーザー、rbenv/Ruby、Nginx、Certbot、systemd unit、UFW ルールを整えます。アプリケーションの Git clone、Bundler、Rails task、npm、frontend build は deploy ユーザーで実行します。秘密鍵はリポジトリへ入れず、`/home/deploy/.ssh` に手動配置してください。`known_hosts` は GitHub の SSH host key を非対話で確認できるよう install 時に準備します。
+`install`、`bootstrap`、`configure`、`deploy`、`rollback`、`https enable`、`https renew` は system 領域や service を変更するため root で実行します。非rootで実行した場合は lock 取得前に `error: install must be run as root` のようなCLIエラーで停止します。`help` と `status` はroot必須ではありません。
+
+初回 install は root 権限で OS パッケージ、deploy ユーザー、Node.js、rbenv/Ruby、Nginx、Certbot、systemd unit を整えます。アプリケーションの Git clone、Bundler、Rails task、npm、frontend build は deploy ユーザーで実行します。秘密鍵はリポジトリへ入れず、`/home/deploy/.ssh` に手動配置してください。`known_hosts` は GitHub の SSH host key を非対話で確認できるよう install 時に準備します。
+
+CLI 自身は `bin/mitsubachi-infra` 単体ではなく、実行に必要な `bin/` と `lib/` を `/opt/mitsubachi-infra/releases/<timestamp>/` へ配置し、`/opt/mitsubachi-infra/current` と `/usr/local/bin/mitsubachi-infra` を symlink で切り替えます。再install時も新しいreleaseを作ってからsymlinkを切り替えるため、途中失敗で壊れた `/usr/local/bin/mitsubachi-infra` を残しません。
+
+Node.js は `runtime.node_major` を要求majorとして扱い、既存 `node --version` が要求以上なら再導入しません。不足している場合は NodeSource apt repository から Node.js を導入し、最後に `node --version` と `npm --version` を確認します。Ubuntu標準aptの古い `nodejs/npm` を frontend production build 用の正常状態とは扱いません。
 
 Nginx の `default_server` は IPv4 `:80` と IPv6 `[::]:80` それぞれで 1 つだけ設定できます。Mitsubachi の Nginx テンプレートは通常 `default_server` を付けません。既存 Nginx を使っている環境では、他サービスの default server を維持したまま frontend/API の `server_name` だけを追加します。
 
@@ -177,6 +183,8 @@ sudo ufw status verbose
 sudo -u deploy ssh -T git@github.com
 sudo -u deploy env HOME=/home/deploy RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/bin:/home/deploy/.rbenv/shims:/usr/local/bin:/usr/bin:/bin bash -lc 'cd /var/www/mitsubachi/current && bundle exec rails runner "puts :ok"'
 ```
+
+install 完了確認では `systemctl restart` 直後に固定 sleep せず、内部Puma endpoint `http://127.0.0.1:<rails_port>/api/health/ready` を最大30回、1秒間隔で確認します。public mode の Host は API domain、LAN mode の Host は明示された `server_ip` です。上限まで失敗した場合は `systemctl status mitsubachi-api.service`、`journalctl -u mitsubachi-api.service -n 100`、`ss -ltnp` を表示します。worker は active 判定に失敗した場合に同様に status と journal を表示します。
 
 Nginx 手動復旧:
 
@@ -470,71 +478,54 @@ cd mitsubachi-infra
 
 ### 対話セットアップ
 
-不足項目だけを対話入力し、最後に secret を伏せた summary を確認してから install を開始します。
+`install --interactive` は `/etc/mitsubachi/config.yml` を読み込んだ後、不足している必須値だけを質問します。既存値がある項目は質問せず、最後に secret を含まない summary を表示して続行確認を行います。EOFの場合は停止し、非対話実行へ自動フォールバックしません。
 
 ```bash
-./scripts/install_local.sh --interactive
+sudo mitsubachi-infra install --interactive
 ```
 
-PostgreSQL は対話入力で role、password、host、port を一度だけ入力します。Infra はそこから Rails production 用の `DATABASE_URL`、`DATABASE_CACHE_URL`、`DATABASE_QUEUE_URL`、`DATABASE_CABLE_URL` を生成し、`/etc/mitsubachi/rails.env` へ配置します。role は `mitsubachi`、host は `127.0.0.1`、DB 名は固定の 4 DB です。生成された URL は secret として扱い、summary やログには値を表示しません。
+質問対象は mode、LAN mode の `server_ip`、public mode の frontend/API domain と Certbot email、Rails port、Ruby version、Node major version、backend/frontend repository、backend/frontend ref です。Rails secret、DATABASE URL、API key は対話入力しません。
 
-`install_local.sh` の値の優先順位:
+設定値の優先順位:
 
 ```text
-1. 明示的なコマンドライン引数
-2. --config で指定された構築設定ファイル
-3. 既存の /etc/mitsubachi/rails.env、または --rails-env-file で指定した入力ファイル
-4. 対話入力
-5. 安全な既定値
+1. CLI の --config で指定した YAML
+2. /etc/mitsubachi/config.yml
+3. コード上の安全な非環境依存デフォルト
 ```
 
-標準入力と標準出力が TTY の場合だけ不足値を対話入力します。CI、cron、非対話 SSH では入力待ちで停止せず、`--non-interactive` 相当として扱います。`--interactive` と `--non-interactive` の同時指定は拒否します。
+LAN modeでは `server_ip` が必須です。コード上のデフォルトには例示IPを持たせていないため、未設定なら `apt-get` や Nginx 変更より前に停止します。public modeでは health check の Host に API domain を使います。
 
-`install_local.sh` 自体は root で実行しません。通常ユーザーで起動し、apt、`/etc`、`/var`、`/mnt`、systemd、Nginx、UFW など root 権限が必要な操作だけ内部で `sudo` を使います。root の `HOME` や `~/.ssh` を Git clone に使わないため、`sudo ./scripts/install_local.sh` は拒否します。
+`install --interactive` で不足値を入力した場合は `/etc/mitsubachi/config.yml` へ atomic に保存します。既存ファイルは backup し、owner/group/mode は `root:deploy 0640` です。`--dry-run --interactive` ではsummaryと変更予定を確認できますが、設定ファイルは書き込みません。
 
-Rails repository の SSH 認証確認は root ではなく、`install_local.sh` を起動した通常ユーザーで `git ls-remote` します。`sudo ssh -T git@github.com` が失敗しても、通常ユーザーの `ssh -T git@github.com` が成功していれば事前確認は通ります。root へ SSH 秘密鍵をコピーしないでください。
+`scripts/install_local.sh` は root で実行する最小bootstrapです。system Ruby、git、sudoがない環境でそれらを入れてから Ruby CLI の `install` を起動します。
 
 ### 設定ファイルを使う方法
 
 ```bash
-cp config/local.env.example config/local.env
-cp env/rails.env.example env/rails.env
-
-./scripts/install_local.sh \
-  --config ./config/local.env \
-  --rails-env-file ./env/rails.env
+sudo install -d -o root -g deploy -m 0750 /etc/mitsubachi
+sudo install -o root -g deploy -m 0640 env/config.yml.example /etc/mitsubachi/config.yml
+sudoedit /etc/mitsubachi/config.yml
+sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install --dry-run
 ```
 
-`config/local.env` は非秘密情報だけを保存します。`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、4 つの `DATABASE*_URL`、`RESEND_API_KEY` は保存しません。`.gitignore` 対象です。
-
-`--rails-env-file ./env/rails.env` は入力元です。正式な配置先は systemd が読む `/etc/mitsubachi/rails.env` で、install 時に `root:deploy 0640` で配置します。
-
-既存 `/etc/mitsubachi/rails.env` が単一 `DATABASE_URL` だけの旧構成の場合、Rails production の複数 DB 契約を満たさないため停止します。`--update-secrets` または `--overwrite-rails-env` を明示し、4 つの `DATABASE*_URL` へ更新してください。
+`config/local.env.example` は legacy shell 用の例です。Ruby CLI の正式入力は YAML です。
 
 ### 非対話実行
 
 ```bash
-./scripts/install_local.sh \
-  --config ./config/local.env \
-  --rails-env-file ./env/rails.env \
-  --non-interactive \
-  --yes
+sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install
 ```
 
-非対話モードでは必須値不足時に即時失敗し、confirmation も入力待ちも行いません。自動化で secret を生成する場合も、Infra 側は勝手に生成せず、`--rails-env-file` などで明示設定してください。
+非対話モードでは必須値不足時に即時失敗し、対話入力へ自動フォールバックしません。
 
 事前確認だけを行う場合:
 
 ```bash
-./scripts/install_local.sh \
-  --config ./config/local.env \
-  --rails-env-file ./env/rails.env \
-  --non-interactive \
-  --yes \
-  --dry-run
+sudo mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
 ```
 
-`--dry-run` は summary と値の採用元だけを表示し、`/etc/mitsubachi/rails.env`、`config/local.env`、secret file、systemd、Nginx、UFW、deploy を変更しません。secret の値そのものも stdout/stderr へ出しません。
+`--dry-run` は変更予定コマンドを表示し、`/etc/mitsubachi/config.yml`、`/etc/mitsubachi/rails.env`、systemd、Nginx、UFW、deploy を変更しません。secret の値も stdout/stderr へ出しません。
 
 ### Rails env の更新
 
@@ -588,7 +579,9 @@ sudo ./scripts/bootstrap_ubuntu.sh \
 
 Ruby version は `--ruby-version` で明示できます。未指定かつ `--app-repo` を指定した場合、Rails API の `.ruby-version` を優先します。Bundler version は `Gemfile.lock` の `BUNDLED WITH` を優先します。
 
-PostgreSQL role/database は、無断で削除・再作成しません。Rails production は primary / cache / queue / cable の 4 DB を使います。role は 4 DB すべてで `mitsubachi` に統一し、host は Unix socket ではなく `127.0.0.1` を明示します。`/etc/mitsubachi/rails.env` に 4 つの URL が配置済みの場合、明示作成は冪等に実行できます。
+Ruby CLI の `install` は PostgreSQL package と service 前提の準備までを担当し、role/database 作成は自動実行しません。Rails production は primary / cache / queue / cable の 4 DB を使います。role は 4 DB すべてで `mitsubachi` に統一し、host は Unix socket ではなく `127.0.0.1` を明示します。
+
+DB初期化は現時点では legacy bootstrap の明示オプション、または手動SQLで実施します。`install` 完了summaryでもDB未初期化であることを表示します。
 
 ```bash
 sudo ./scripts/bootstrap_ubuntu.sh \
@@ -716,6 +709,12 @@ BULK_DOWNLOAD_TMP
 SESSION_COOKIE_SECURE
   LAN HTTP 検証では false を指定する。ただし Rails 側がこの環境変数を
   実際に参照しているとは限らない。
+
+WEB_CONCURRENCY
+  既定は 0。Puma を single mode で起動し、worker 数 1 の cluster mode
+  警告を避ける。複数 worker を使う場合だけ 2 以上を明示する。
+  Rails 側の Puma 設定が WEB_CONCURRENCY を参照していない場合は
+  mitsubachi-ruby 側の修正が必要。
 
 DATABASE_URL / DATABASE_CACHE_URL / DATABASE_QUEUE_URL / DATABASE_CABLE_URL
   Rails production 複数 DB 用の PostgreSQL 接続 URL。4 つすべて必須。
