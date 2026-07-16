@@ -61,9 +61,11 @@ module MitsubachiInfra
         'output_directory' => 'dist'
       },
       'https' => {
-        'host' => nil,
+        'frontend_host' => 'mitsubachi.shiosalt.com',
+        'api_host' => 'mitsubachi-api.shiosalt.com',
         'email' => nil,
-        'staging' => false,
+        'acme_webroot' => '/var/lib/mitsubachi/acme',
+        'enable_hsts' => false,
         'challenge' => 'http-01'
       }
     }.freeze
@@ -105,7 +107,7 @@ module MitsubachiInfra
     end
 
     def app_host
-      public? ? fetch('domains').fetch('api') : fetch('server_ip')
+      public? ? api_host : fetch('server_ip')
     end
 
     def allowed_hosts
@@ -117,15 +119,23 @@ module MitsubachiInfra
     end
 
     def production_frontend_url
-      "https://#{data.fetch('domains').fetch('frontend')}"
+      "https://#{frontend_host}"
     end
 
     def production_api_url
-      "https://#{data.fetch('domains').fetch('api')}"
+      "https://#{api_host}"
     end
 
     def certificate_domains
-      [data.fetch('domains').fetch('frontend'), data.fetch('domains').fetch('api')].uniq
+      [frontend_host, api_host].uniq
+    end
+
+    def frontend_host
+      fetch('https').fetch('frontend_host')
+    end
+
+    def api_host
+      fetch('https').fetch('api_host')
     end
 
     def public?
@@ -155,7 +165,12 @@ module MitsubachiInfra
       mode = data['deployment_mode'].to_s
       missing << 'deployment_mode' unless %w[lan public].include?(mode)
       missing << 'server_ip' if mode == 'lan' && data['server_ip'].to_s.empty?
-      missing << 'https.email' if mode == 'public' && data.fetch('https').fetch('email').to_s.empty?
+      if mode == 'public'
+        https = data.fetch('https')
+        missing << 'https.frontend_host' if https['frontend_host'].to_s.empty?
+        missing << 'https.api_host' if https['api_host'].to_s.empty?
+        missing << 'https.email' if https['email'].to_s.empty?
+      end
       missing
     end
 
@@ -218,12 +233,17 @@ module MitsubachiInfra
 
     def validate_https!
       https = data.fetch('https')
+      if https.key?('host')
+        raise ValidationError, 'https.host is no longer supported. Set https.frontend_host and https.api_host.'
+      end
       raise ValidationError, 'https.challenge must be http-01' unless https['challenge'] == 'http-01'
+      present!(https['acme_webroot'], 'https.acme_webroot')
+      raise ValidationError, 'https.acme_webroot must be absolute' unless https['acme_webroot'].to_s.start_with?('/')
       return unless public?
 
-      host = https['host'].to_s
       email = https['email'].to_s
-      validate_public_host!(host) unless host.empty?
+      validate_public_host!(https['frontend_host'], 'https.frontend_host')
+      validate_public_host!(https['api_host'], 'https.api_host')
       return if email.match?(/\A[^@\s]+@[^@\s]+\.[^@\s]+\z/)
 
       raise ValidationError,
@@ -231,7 +251,7 @@ module MitsubachiInfra
     end
 
     def validate_production_schema!
-      %w[frontend api].each { |key| validate_public_host!(data.fetch('domains').fetch(key)) }
+      data.fetch('domains', {}).each { |_key, value| validate_public_host!(value, 'domains') } if data.key?('domains')
       paths = data.fetch('paths')
       %w[rails_root frontend_root rails_env frontend_env server_id].each do |key|
         value = paths.fetch(key)
@@ -248,16 +268,16 @@ module MitsubachiInfra
       minecraft.each { |port| integer_port!(port, 'ports.minecraft') }
     end
 
-    def validate_public_host!(host)
-      present!(host, 'https.host')
-      raise ValidationError, 'https.host must not include scheme' if host.include?('://')
-      raise ValidationError, 'https.host must not include path' if host.include?('/')
-      raise ValidationError, 'https.host must not be localhost' if host == 'localhost'
-      raise ValidationError, 'https.host must be hostname, not IP' if ip_address?(host)
+    def validate_public_host!(host, name = 'hostname')
+      present!(host, name)
+      raise ValidationError, "#{name} must not include scheme" if host.include?('://')
+      raise ValidationError, "#{name} must not include path" if host.include?('/')
+      raise ValidationError, "#{name} must not be localhost" if host == 'localhost'
+      raise ValidationError, "#{name} must be hostname, not IP" if ip_address?(host)
       return if host.match?(/\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\z/i)
 
       raise ValidationError,
-            'https.host is invalid'
+            "#{name} is invalid"
     end
 
     def present!(value, name)

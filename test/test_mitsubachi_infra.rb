@@ -148,6 +148,138 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  class FakeNginxForHttps
+    attr_reader :installs, :reloads, :tests
+
+    def initialize(test_status: 0)
+      @test_status = test_status
+      @installs = []
+      @reloads = 0
+      @tests = 0
+    end
+
+    def install(mode:, **_options)
+      @installs << mode
+    end
+
+    def test!
+      @tests += 1
+      raise MitsubachiInfra::CommandError.new(command: %w[nginx -t], status: @test_status,
+                                              stdout: '', stderr: 'nginx failed') unless @test_status.zero?
+    end
+
+    def test_result
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: @test_status)
+    end
+
+    def reload
+      @reloads += 1
+    end
+  end
+
+  class FakeDnsResolver
+    def initialize(a: ['203.0.113.10'], aaaa: [])
+      @a = a
+      @aaaa = aaaa
+    end
+
+    def getresources(_host, type)
+      addresses = type == Resolv::DNS::Resource::IN::AAAA ? @aaaa : @a
+      addresses.map { |address| Struct.new(:address).new(address) }
+    end
+  end
+
+  class HttpsRunner < RecordingRunner
+    attr_accessor :issuer, :san_hosts, :expired, :modulus_match
+
+    def initialize(dry_run: false, issuer: 'issuer=R3', san_hosts: %w[mitsubachi.shiosalt.com mitsubachi-api.shiosalt.com],
+                   expired: false, modulus_match: true, checkend_statuses: nil, issuer_after_certbot: nil,
+                   force_reissue: false)
+      super(dry_run: dry_run)
+      @issuer = issuer
+      @san_hosts = san_hosts
+      @expired = expired
+      @modulus_match = modulus_match
+      @checkend_statuses = checkend_statuses&.dup
+      @issuer_after_certbot = issuer_after_certbot
+      @force_reissue = force_reissue
+      @obtained_hosts = {}
+    end
+
+    def run(*command, allow_failure: false, **_options)
+      argv = command.flatten.map(&:to_s)
+      @commands << argv
+      result = command_result(argv)
+      result
+    end
+
+    def command_result(argv)
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0) if argv == %w[ss -ltnp]
+      if argv[0] == 'certbot'
+        host = argv[argv.index('--cert-name') + 1] if argv.include?('--cert-name')
+        @obtained_hosts[host] = true if host
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+      end
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0) if argv[0] == 'install'
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: 'active', stderr: '', status: 0) if argv == %w[systemctl is-active nginx]
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: 'enabled', stderr: '', status: 0) if argv == %w[systemctl is-enabled certbot.timer]
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: 'active', stderr: '', status: 0) if argv == %w[systemctl is-active certbot.timer]
+      return openssl_result(argv) if argv[0] == 'openssl'
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0) if argv[0] == 'curl'
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0) if argv[0] == 'systemctl'
+
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+
+    def openssl_result(argv)
+      if argv.include?('-checkend')
+        status = if @checkend_statuses
+                   @checkend_statuses.length > 1 ? @checkend_statuses.shift : @checkend_statuses.first
+                 elsif @force_reissue && !@obtained_hosts[host_from_path(argv)]
+                   1
+                 else
+                   @expired ? 1 : 0
+                 end
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: status)
+      end
+      if argv.include?('subjectAltName') && !argv.include?('-subject')
+        san = @san_hosts.map { |host| "DNS:#{host}" }.join(', ')
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: "X509v3 Subject Alternative Name:\n    #{san}\n",
+                                                          stderr: '', status: 0)
+      end
+      if argv.include?('-issuer') && !argv.include?('-subject')
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: "#{issuer_for(host_from_path(argv))}\n",
+                                                          stderr: '', status: 0)
+      end
+
+      if argv.include?('-modulus')
+        key = argv[1] == 'rsa'
+        modulus = key && !@modulus_match ? 'Modulus=def' : 'Modulus=abc'
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: "#{modulus}\n", stderr: '', status: 0)
+      end
+      if argv.include?('-subject') && argv.include?('-dates')
+        san = @san_hosts.map { |host| "DNS:#{host}" }.join(', ')
+        text = "subject=CN=mitsubachi\n#{issuer_for(host_from_path(argv))}\nnotBefore=Jan  1 00:00:00 2026 GMT\nnotAfter=Jan  1 00:00:00 2030 GMT\nX509v3 Subject Alternative Name:\n    #{san}\n"
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: text, stderr: '', status: 0)
+      end
+
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+
+    def issuer_for(host)
+      return @issuer_after_certbot if host && @issuer_after_certbot && @obtained_hosts[host]
+
+      @issuer
+    end
+
+    def host_from_path(argv)
+      path = argv[argv.index('-in') + 1] if argv.include?('-in')
+      return nil unless path
+
+      File.basename(File.dirname(path))
+    end
+  end
+
   def config_data(overrides = {})
     MitsubachiInfra::Configuration::DEFAULT.merge('server_ip' => '192.168.1.50').merge(overrides)
   end
@@ -172,6 +304,29 @@ class MitsubachiInfraTest < Minitest::Test
     FileUtils.mkdir_p([paths[:conf_d], paths[:sites_enabled], File.dirname(paths[:target])])
     File.write(paths[:nginx_conf], "events {}\nhttp { include #{paths[:conf_d]}/*; include #{paths[:sites_enabled]}/*; }\n")
     paths
+  end
+
+  def certbot_for(config, runner:, nginx: FakeNginxForHttps.new, health: FakeHealth.new, live_root: nil,
+                  resolver: FakeDnsResolver.new, logger: StringIO.new)
+    kwargs = {
+      config: config,
+      runner: runner,
+      nginx: nginx,
+      health: health,
+      logger: logger,
+      resolver: resolver
+    }
+    kwargs[:letsencrypt_live] = live_root if live_root
+    MitsubachiInfra::Certbot.new(**kwargs)
+  end
+
+  def write_fake_certs(live_root, hosts = %w[mitsubachi.shiosalt.com mitsubachi-api.shiosalt.com])
+    hosts.each do |host|
+      dir = File.join(live_root, host)
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, 'fullchain.pem'), "cert #{host}\n")
+      File.write(File.join(dir, 'privkey.pem'), "key #{host}\n")
+    end
   end
 
   def capture_health_request
@@ -215,17 +370,82 @@ class MitsubachiInfraTest < Minitest::Test
   def test_public_hostname_validation
     %w[localhost 127.0.0.1 https://files.example.com files.example.com/path].each do |host|
       data = config_data('deployment_mode' => 'public',
-                         'https' => { 'host' => host, 'email' => 'ops@example.com',
-                                      'challenge' => 'http-01' })
+                         'https' => MitsubachiInfra::Configuration::DEFAULT.fetch('https').merge(
+                           'frontend_host' => host,
+                           'api_host' => 'api.example.com',
+                           'email' => 'ops@example.com'
+                         ))
       assert_raises(MitsubachiInfra::ValidationError) { MitsubachiInfra::Configuration.new('/missing', data: data) }
     end
   end
 
   def test_public_config_accepts_hostname_and_email
     data = config_data('deployment_mode' => 'public',
-                       'https' => { 'host' => 'files.example.com', 'email' => 'ops@example.com',
-                                    'challenge' => 'http-01' })
+                       'https' => MitsubachiInfra::Configuration::DEFAULT.fetch('https').merge(
+                         'frontend_host' => 'files.example.com',
+                         'api_host' => 'api.example.com',
+                         'email' => 'ops@example.com'
+                       ))
     assert_equal 'public', MitsubachiInfra::Configuration.new('/missing', data: data).fetch('deployment_mode')
+  end
+
+  def test_old_https_host_schema_is_rejected
+    data = config_data('deployment_mode' => 'public',
+                       'https' => MitsubachiInfra::Configuration::DEFAULT.fetch('https').merge(
+                         'host' => 'files.example.com',
+                         'email' => 'ops@example.com'
+                       ))
+
+    error = assert_raises(MitsubachiInfra::ValidationError) { MitsubachiInfra::Configuration.new('/missing', data: data) }
+    assert_includes error.message, 'https.host is no longer supported'
+  end
+
+  def test_https_requires_frontend_and_api_hosts
+    base = MitsubachiInfra::Configuration::DEFAULT.fetch('https').merge('email' => 'ops@example.com')
+
+    assert_raises(MitsubachiInfra::ValidationError) do
+      MitsubachiInfra::Configuration.new('/missing', data: config_data('deployment_mode' => 'public',
+                                                                       'https' => base.merge('frontend_host' => '')))
+    end
+    assert_raises(MitsubachiInfra::ValidationError) do
+      MitsubachiInfra::Configuration.new('/missing', data: config_data('deployment_mode' => 'public',
+                                                                      'https' => base.merge('api_host' => '')))
+    end
+  end
+
+  def test_https_requires_email_in_public_mode
+    base = MitsubachiInfra::Configuration::DEFAULT.fetch('https').merge(
+      'frontend_host' => 'files.example.com',
+      'api_host' => 'api.example.com',
+      'email' => ''
+    )
+
+    error = assert_raises(MitsubachiInfra::ValidationError) do
+      MitsubachiInfra::Configuration.new('/missing', data: config_data('deployment_mode' => 'public',
+                                                                       'https' => base))
+    end
+    assert_includes error.message, 'https.email is required'
+  end
+
+  def test_https_rejects_unknown_challenge
+    data = config_data('deployment_mode' => 'public',
+                       'https' => MitsubachiInfra::Configuration::DEFAULT.fetch('https').merge(
+                         'frontend_host' => 'files.example.com',
+                         'api_host' => 'api.example.com',
+                         'email' => 'ops@example.com',
+                         'challenge' => 'dns-01'
+                       ))
+
+    error = assert_raises(MitsubachiInfra::ValidationError) { MitsubachiInfra::Configuration.new('/missing', data: data) }
+    assert_includes error.message, 'https.challenge must be http-01'
+  end
+
+  def test_https_defaults_acme_webroot_and_hsts
+    config = MitsubachiInfra::Configuration.new('/missing', data: MitsubachiInfra::Configuration::DEFAULT,
+                                                          validate: false)
+
+    assert_equal '/var/lib/mitsubachi/acme', config.fetch('https').fetch('acme_webroot')
+    assert_equal false, config.fetch('https').fetch('enable_hsts')
   end
 
   def test_rails_env_public_hosts
@@ -612,6 +832,7 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, 'server_name mitsubachi.shiosalt.com;'
     assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com;'
     assert_includes rendered, '/.well-known/acme-challenge/'
+    assert_includes rendered, 'root /var/lib/mitsubachi/acme;'
     assert_includes rendered, 'try_files $uri $uri/ /index.html;'
     assert_includes rendered, 'proxy_set_header X-Forwarded-Host $host;'
     assert_includes rendered, 'location /internal/storage/drive_items/'
@@ -629,6 +850,127 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi.shiosalt.com/fullchain.pem'
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem'
     assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
+  end
+
+  def test_certbot_obtains_frontend_and_api_certificates
+    Dir.mktmpdir do |dir|
+      live = File.join(dir, 'live')
+      write_fake_certs(live)
+      runner = HttpsRunner.new(force_reissue: true)
+      config = production_config(dir)
+      certbot_for(config, runner: runner, live_root: live).enable
+
+      frontend = runner.commands.find { |command| command.include?('--cert-name') && command.include?('mitsubachi.shiosalt.com') }
+      api = runner.commands.find { |command| command.include?('--cert-name') && command.include?('mitsubachi-api.shiosalt.com') }
+      assert_equal %w[certbot certonly], frontend[0, 2]
+      assert_equal %w[certbot certonly], api[0, 2]
+      assert_includes frontend, '--webroot-path'
+      assert_includes frontend, '/var/lib/mitsubachi/acme'
+      assert_includes api, '-d'
+      refute_includes frontend, '--staging'
+      refute_includes api, '--staging'
+    end
+  end
+
+  def test_certbot_staging_argument_only_when_requested
+    Dir.mktmpdir do |dir|
+      write_fake_certs(File.join(dir, 'live'))
+      staging_runner = HttpsRunner.new(issuer: 'issuer=(STAGING) Fake LE Intermediate X1')
+      certbot_for(production_config(dir), runner: staging_runner, live_root: File.join(dir, 'live')).enable(staging: true)
+      certbot_commands = staging_runner.commands.select { |command| command[0, 2] == %w[certbot certonly] }
+      assert_equal 2, certbot_commands.length
+      assert certbot_commands.all? { |command| command.include?('--staging') }
+
+      write_fake_certs(File.join(dir, 'live2'))
+      production_runner = HttpsRunner.new(force_reissue: true)
+      certbot_for(production_config(dir), runner: production_runner, live_root: File.join(dir, 'live2')).enable
+      production_commands = production_runner.commands.select { |command| command[0, 2] == %w[certbot certonly] }
+      assert production_commands.all? { |command| !command.include?('--staging') }
+    end
+  end
+
+  def test_certbot_reuses_valid_production_certificates
+    Dir.mktmpdir do |dir|
+      live = File.join(dir, 'live')
+      write_fake_certs(live)
+      runner = HttpsRunner.new
+
+      certbot_for(production_config(dir), runner: runner, live_root: live).enable
+
+      assert runner.commands.none? { |command| command[0, 2] == %w[certbot certonly] }
+    end
+  end
+
+  def test_certbot_does_not_reuse_staging_certificate_for_production
+    Dir.mktmpdir do |dir|
+      live = File.join(dir, 'live')
+      write_fake_certs(live)
+      runner = HttpsRunner.new(issuer: 'issuer=(STAGING) Fake LE Intermediate X1', issuer_after_certbot: 'issuer=R3')
+
+      certbot_for(production_config(dir), runner: runner, live_root: live).enable
+
+      certbot_commands = runner.commands.select { |command| command[0, 2] == %w[certbot certonly] }
+      assert_equal 2, certbot_commands.length
+      assert certbot_commands.all? { |command| !command.include?('--staging') }
+    end
+  end
+
+  def test_certbot_rejects_expired_or_san_mismatched_certificate
+    Dir.mktmpdir do |dir|
+      live = File.join(dir, 'live')
+      write_fake_certs(live)
+
+      expired_runner = HttpsRunner.new(expired: true)
+      error = assert_raises(MitsubachiInfra::Error) do
+        certbot_for(production_config(dir), runner: expired_runner, live_root: live).send(:verify_certificate!,
+                                                                                         'mitsubachi.shiosalt.com',
+                                                                                         staging: false)
+      end
+      assert_includes error.message, 'certificate is expired'
+
+      san_runner = HttpsRunner.new(san_hosts: ['other.example.com'])
+      error = assert_raises(MitsubachiInfra::Error) do
+        certbot_for(production_config(dir), runner: san_runner, live_root: live).send(:verify_certificate!,
+                                                                                     'mitsubachi.shiosalt.com',
+                                                                                     staging: false)
+      end
+      assert_includes error.message, 'certificate SAN does not include'
+    end
+  end
+
+  def test_https_status_json_contains_both_hosts_and_timer_status
+    Dir.mktmpdir do |dir|
+      live = File.join(dir, 'live')
+      write_fake_certs(live)
+      runner = HttpsRunner.new
+      stdout = StringIO.new
+      original_stdout = $stdout
+      $stdout = stdout
+
+      certbot_for(production_config(dir), runner: runner, live_root: live).status(json: true)
+
+      data = JSON.parse(stdout.string)
+      assert_equal 'mitsubachi.shiosalt.com', data.fetch('frontend_hostname')
+      assert_equal 'mitsubachi-api.shiosalt.com', data.fetch('api_hostname')
+      assert_equal true, data.fetch('certbot_timer').fetch('enabled')
+    ensure
+      $stdout = original_stdout
+    end
+  end
+
+  def test_https_dry_run_does_not_write_or_require_certificates
+    Dir.mktmpdir do |dir|
+      live = File.join(dir, 'live')
+      runner = HttpsRunner.new(dry_run: true)
+      nginx = FakeNginxForHttps.new
+      logger = StringIO.new
+
+      certbot_for(production_config(dir), runner: runner, nginx: nginx, live_root: live, logger: logger).enable(staging: true)
+
+      refute_path_exists live
+      assert_equal %w[public_http_challenge public_https], nginx.installs
+      assert_includes logger.string, '[DRY-RUN] verify certificate mitsubachi.shiosalt.com staging=true'
+    end
   end
 
   def test_health_check_sends_public_host_header
@@ -885,9 +1227,12 @@ class MitsubachiInfraTest < Minitest::Test
         'minecraft' => [25_565, 25_566]
       },
       'https' => {
-        'host' => 'mitsubachi.shiosalt.com',
+        'frontend_host' => 'mitsubachi.shiosalt.com',
+        'api_host' => 'mitsubachi-api.shiosalt.com',
         'email' => 'ops@example.com',
-        'challenge' => 'http-01'
+        'challenge' => 'http-01',
+        'acme_webroot' => '/var/lib/mitsubachi/acme',
+        'enable_hsts' => false
       }
     ))
   end

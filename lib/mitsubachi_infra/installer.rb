@@ -141,7 +141,7 @@ module MitsubachiInfra
 
     def enable_https_if_possible(nginx)
       Certbot.new(config: @config, runner: @runner, nginx: nginx,
-                  health: HealthCheck.new(logger: $stderr)).enable(staging: @config.fetch('https').fetch('staging'))
+                  health: HealthCheck.new(logger: $stderr)).enable(staging: false)
     rescue Error => e
       warn "warning: HTTPS enable failed; keeping HTTP configuration: #{e.message}"
     end
@@ -190,8 +190,8 @@ module MitsubachiInfra
       if @config.lan?
         ask_value('server_ip', 'LAN server private IPv4') if @config.fetch('server_ip').to_s.empty?
       else
-        ask_value('domains.frontend', 'Frontend domain') if @config.fetch('domains').fetch('frontend').to_s.empty?
-        ask_value('domains.api', 'API domain') if @config.fetch('domains').fetch('api').to_s.empty?
+        ask_value('https.frontend_host', 'Frontend domain') if @config.fetch('https').fetch('frontend_host').to_s.empty?
+        ask_value('https.api_host', 'API domain') if @config.fetch('https').fetch('api_host').to_s.empty?
         ask_value('https.email', 'Certbot email') if @config.fetch('https').fetch('email').to_s.empty?
       end
       ask_value('ports.rails', 'Rails internal port') if @config.fetch('ports').fetch('rails').to_s.empty?
@@ -248,8 +248,8 @@ module MitsubachiInfra
       @output.puts('Install summary:')
       @output.puts("  mode: #{@config.fetch('deployment_mode')}")
       @output.puts("  server_ip: #{@config.fetch('server_ip') || '(not used)'}")
-      @output.puts("  frontend domain: #{@config.fetch('domains').fetch('frontend')}")
-      @output.puts("  api domain: #{@config.fetch('domains').fetch('api')}")
+      @output.puts("  frontend domain: #{@config.frontend_host}")
+      @output.puts("  api domain: #{@config.api_host}")
       @output.puts("  rails port: #{@config.fetch('ports').fetch('rails')}")
       @output.puts("  ruby: #{@config.fetch('runtime').fetch('ruby_version')}")
       @output.puts("  node major: #{@config.fetch('runtime').fetch('node_major')}")

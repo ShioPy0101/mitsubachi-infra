@@ -9,10 +9,10 @@ server {
 server {
     listen 80;
     listen [::]:80;
-    server_name <%= config.fetch("domains").fetch("frontend") %>;
+    server_name <%= config.frontend_host %>;
 
     location ^~ /.well-known/acme-challenge/ {
-        root /var/lib/mitsubachi/acme;
+        root <%= config.fetch("https").fetch("acme_webroot") %>;
         default_type text/plain;
     }
 
@@ -27,10 +27,10 @@ server {
 server {
     listen 80;
     listen [::]:80;
-    server_name <%= config.fetch("domains").fetch("api") %>;
+    server_name <%= config.api_host %>;
 
     location ^~ /.well-known/acme-challenge/ {
-        root /var/lib/mitsubachi/acme;
+        root <%= config.fetch("https").fetch("acme_webroot") %>;
         default_type text/plain;
     }
 

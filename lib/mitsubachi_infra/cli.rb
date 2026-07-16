@@ -147,16 +147,24 @@ module MitsubachiInfra
 
     def https
       sub = @argv.shift || 'status'
-      opts = { staging: false }
-      OptionParser.new { |parser| parser.on('--staging') { opts[:staging] = true } }.parse!(@argv)
+      opts = { staging: false, json: false }
+      OptionParser.new do |parser|
+        parser.on('--staging') { opts[:staging] = true }
+        parser.on('--json') { opts[:json] = true }
+        parser.on('--dry-run') do
+          @options[:dry_run] = true
+          @runner.dry_run = true
+        end
+      end.parse!(@argv)
       @config.validate!
       nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
-      certbot = Certbot.new(config: @config, runner: @runner, nginx: nginx, health: HealthCheck.new(logger: $stderr))
+      certbot = Certbot.new(config: @config, runner: @runner, nginx: nginx, health: HealthCheck.new(logger: $stderr),
+                            logger: $stderr)
       case sub
-      when 'check' then certbot.check
+      when 'check' then certbot.check(json: opts[:json])
       when 'enable' then locked { certbot.enable(staging: opts[:staging]) }
       when 'renew' then locked { certbot.renew }
-      when 'status' then certbot.status
+      when 'status' then certbot.status(json: opts[:json])
       else raise ValidationError, 'https command must be check, enable, renew, or status'
       end
     end
@@ -178,7 +186,10 @@ module MitsubachiInfra
           mitsubachi-infra doctor [--dry-run]
           mitsubachi-infra mail-test --to ADDRESS [--dry-run]
           mitsubachi-infra status [--json]
-          mitsubachi-infra https check|enable|renew|status [--staging] [--dry-run]
+          mitsubachi-infra https check [--dry-run]
+          mitsubachi-infra https enable [--staging] [--dry-run]
+          mitsubachi-infra https renew [--dry-run]
+          mitsubachi-infra https status [--json]
       USAGE
     end
 

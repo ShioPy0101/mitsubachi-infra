@@ -50,7 +50,9 @@ frontend:
   output_directory: dist
 
 https:
-  host: mitsubachi.shiosalt.com
+  frontend_host: mitsubachi.shiosalt.com
+  api_host: mitsubachi-api.shiosalt.com
   email: admin@shiosalt.com
-  staging: false
   challenge: http-01
+  acme_webroot: /var/lib/mitsubachi/acme
+  enable_hsts: false

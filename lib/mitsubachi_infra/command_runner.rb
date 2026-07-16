@@ -23,7 +23,7 @@ module MitsubachiInfra
       end
     end
 
-    attr_reader :dry_run
+    attr_accessor :dry_run
 
     def initialize(logger:, dry_run: false)
       @logger = logger

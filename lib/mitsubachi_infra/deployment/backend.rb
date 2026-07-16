@@ -103,7 +103,7 @@ module MitsubachiInfra
 
       def backend_health_url
         if @config.public?
-          "https://#{@config.fetch('domains').fetch('api')}#{@config.fetch('backend').fetch('health_path')}/ready"
+          "https://#{@config.api_host}#{@config.fetch('backend').fetch('health_path')}/ready"
         else
           "http://#{@config.fetch('server_ip')}#{@config.fetch('backend').fetch('health_path')}/ready"
         end

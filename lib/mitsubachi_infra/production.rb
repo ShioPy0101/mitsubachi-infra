@@ -271,7 +271,7 @@ module MitsubachiInfra
       return unless @config.public?
 
       Certbot.new(config: @config, runner: @runner, nginx: nginx,
-                  health: HealthCheck.new(logger: @logger)).enable(staging: @config.fetch('https').fetch('staging'))
+                  health: HealthCheck.new(logger: @logger), logger: @logger).enable(staging: false)
     rescue Error => e
       @logger.puts("warning: HTTPS enable failed; keeping HTTP configuration: #{e.message}")
     end

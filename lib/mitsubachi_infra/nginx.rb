@@ -49,6 +49,10 @@ module MitsubachiInfra
       @runner.run('nginx', '-t')
     end
 
+    def test_result
+      @runner.run('nginx', '-t', allow_failure: true)
+    end
+
     def reload
       @runner.run('systemctl', 'reload', 'nginx')
     end
