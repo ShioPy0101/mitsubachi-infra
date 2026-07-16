@@ -1,15 +1,17 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require_relative '../frontend_env'
 require_relative 'release_manager'
 
 module MitsubachiInfra
   module Deployment
     class Frontend
-      def initialize(config:, runner:, health:)
+      def initialize(config:, runner:, health:, logger: $stderr)
         @config = config
         @runner = runner
         @health = health
+        @logger = logger
       end
 
       def deploy(ref: nil)
@@ -27,11 +29,16 @@ module MitsubachiInfra
           @runner.deploy('git', "--git-dir=#{repo}", "--work-tree=#{release}", 'checkout', '-f', sha, '--', '.',
                          config: @config)
           @runner.deploy('npm', 'ci', config: @config, chdir: release, timeout: 1800)
-          @runner.deploy(*app.fetch('build_command'), config: @config, chdir: release, timeout: 1800)
-          index = File.join(release, app.fetch('output_directory'), 'index.html')
-          raise Error, "frontend build output missing index.html: #{index}" unless @runner.dry_run || File.exist?(index)
+          env = FrontendEnv.new(config: @config, logger: @logger)
+          env.log_summary(build_dir: release)
+          @runner.deploy(*app.fetch('build_command'), config: @config, chdir: release, timeout: 1800,
+                                                    env: env.build_env)
+          verify_build_output(release)
 
+          @logger.puts("[SWITCH] frontend current -> #{release}")
           manager.activate(release) unless @runner.dry_run
+          @runner.run('nginx', '-t')
+          @runner.run('systemctl', 'reload', 'nginx')
           @health.check!(frontend_health_url, dry_run: @runner.dry_run)
           manager.cleanup
         rescue StandardError
@@ -53,6 +60,12 @@ module MitsubachiInfra
 
       def frontend_health_url
         @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
+      end
+
+      def verify_build_output(release)
+        index = File.join(release, @config.fetch('frontend').fetch('output_directory'), 'index.html')
+        @logger.puts("[CHECK] #{index}")
+        raise Error, "frontend build output missing index.html: #{index}" unless @runner.dry_run || File.exist?(index)
       end
     end
   end

@@ -31,7 +31,10 @@ module MitsubachiInfra
     end
 
     def run(*command, env: {}, chdir: nil, timeout: 600, user: nil, deploy_env: nil, allow_failure: false)
-      argv = command.flatten.compact.map(&:to_s)
+      flattened = command.flatten
+      raise Error, 'command argv must not contain nil' if flattened.any?(&:nil?)
+
+      argv = flattened.map(&:to_s)
       display_user = user
       argv = user_command(user, deploy_env, argv) if present?(user)
       log_command(argv, chdir, user: display_user)

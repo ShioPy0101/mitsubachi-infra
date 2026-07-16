@@ -111,7 +111,7 @@ module MitsubachiInfra
       writer.write(rails_path, EnvTemplates.rails_env(@config), owner: 'root',
                    group: @config.fetch('deploy').fetch('user'), mode: '0640') unless File.exist?(rails_path)
       writer.write(frontend_path, EnvTemplates.frontend_env(@config), owner: 'root',
-                   group: @config.fetch('deploy').fetch('user'), mode: '0640')
+                   group: @config.fetch('deploy').fetch('user'), mode: '0640') unless File.exist?(frontend_path)
     end
 
     def install_templates

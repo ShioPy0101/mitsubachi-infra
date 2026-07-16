@@ -14,6 +14,7 @@ require 'mitsubachi_infra/command_runner'
 require 'mitsubachi_infra/configuration'
 require 'mitsubachi_infra/cli'
 require 'mitsubachi_infra/env_templates'
+require 'mitsubachi_infra/frontend_env'
 require 'mitsubachi_infra/health_check'
 require 'mitsubachi_infra/installer'
 require 'mitsubachi_infra/nginx'
@@ -90,6 +91,31 @@ class MitsubachiInfraTest < Minitest::Test
     def deploy(*command, **options)
       @calls << [command.flatten.map(&:to_s), options]
       MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+  end
+
+  class FrontendDeployRunner < OptionRecordingRunner
+    def initialize(fail_build: false, dry_run: true)
+      super()
+      @fail_build = fail_build
+      @dry_run = dry_run
+    end
+
+    def deploy(*command, **options)
+      argv = command.flatten.map(&:to_s)
+      @calls << [argv, options]
+      @commands << argv
+      if @fail_build && argv == %w[npm run build]
+        raise MitsubachiInfra::CommandError.new(command: argv, status: 1, stdout: '', stderr: 'build failed')
+      end
+
+      MitsubachiInfra::CommandRunner::Result.new(stdout: command_stdout(argv), stderr: '', status: 0)
+    end
+
+    def command_stdout(argv)
+      return 'abcdef1234567890' if argv.include?('rev-parse')
+
+      ''
     end
   end
 
@@ -329,6 +355,12 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def write_frontend_env(config, value)
+    path = config.fetch('paths').fetch('frontend_env')
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, "VITE_API_BASE_URL=#{value}\n")
+  end
+
   def capture_health_request
     captured = nil
     response = Struct.new(:code).new('200')
@@ -468,6 +500,126 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, 'ALLOWED_HOSTS=192.168.1.50,127.0.0.1,localhost'
   end
 
+  def test_frontend_env_template_uses_public_api_domain
+    config = production_config('/tmp/mitsubachi-test')
+
+    assert_equal "VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com\n",
+                 MitsubachiInfra::EnvTemplates.frontend_env(config)
+  end
+
+  def test_frontend_env_template_uses_lan_server_ip
+    config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+      'deployment_mode' => 'lan',
+      'server_ip' => '192.168.10.151'
+    ))
+
+    assert_equal "VITE_API_BASE_URL=http://192.168.10.151\n",
+                 MitsubachiInfra::EnvTemplates.frontend_env(config)
+  end
+
+  def test_frontend_env_parses_comments_blank_lines_and_trims_values
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'frontend.env')
+      File.write(path, <<~ENV)
+        # public value, not a secret
+
+        VITE_API_BASE_URL=  https://mitsubachi-api.shiosalt.com  
+      ENV
+
+      assert_equal({ 'VITE_API_BASE_URL' => 'https://mitsubachi-api.shiosalt.com' },
+                   MitsubachiInfra::FrontendEnv.parse_file(path))
+    end
+  end
+
+  def test_frontend_env_requires_vite_api_base_url
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      FileUtils.mkdir_p(File.dirname(config.fetch('paths').fetch('frontend_env')))
+      File.write(config.fetch('paths').fetch('frontend_env'), "# missing\n")
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new).build_env
+      end
+      assert_includes error.message, 'VITE_API_BASE_URL is not configured'
+      assert_includes error.message, config.fetch('paths').fetch('frontend_env')
+    end
+  end
+
+  def test_frontend_env_rejects_invalid_url_and_accepts_http_https
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'ftp://example.com')
+      assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new).build_env
+      end
+
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      assert_equal 'https://mitsubachi-api.shiosalt.com',
+                   MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new).build_env.fetch('VITE_API_BASE_URL')
+
+      lan = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+        'deployment_mode' => 'lan',
+        'server_ip' => '192.168.10.151',
+        'paths' => config.fetch('paths')
+      ))
+      write_frontend_env(lan, 'http://192.168.10.151')
+      assert_equal 'http://192.168.10.151',
+                   MitsubachiInfra::FrontendEnv.new(config: lan, logger: StringIO.new).build_env.fetch('VITE_API_BASE_URL')
+    end
+  end
+
+  def test_frontend_env_rejects_localhost_in_public_mode
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'http://127.0.0.1:3000')
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new).build_env
+      end
+      assert_includes error.message, 'must not point to 127.0.0.1 in public mode'
+    end
+  end
+
+  def test_config_show_reports_frontend_env_and_masks_secret_like_values
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      config_path = File.join(dir, 'config.yml')
+      File.write(config_path, config.data.to_yaml)
+      frontend_path = config.fetch('paths').fetch('frontend_env')
+      FileUtils.mkdir_p(File.dirname(frontend_path))
+      File.write(frontend_path, <<~ENV)
+        VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
+        VITE_PUBLIC_TOKEN=visible-but-mask-this
+      ENV
+      stdout = StringIO.new
+      original_stdout = $stdout
+      $stdout = stdout
+
+      assert_equal 0, MitsubachiInfra::CLI.new(['--config', config_path, 'config', 'show'], repo_root: ROOT).run
+
+      assert_includes stdout.string, 'Frontend URL: https://mitsubachi.shiosalt.com'
+      assert_includes stdout.string, 'API URL: https://mitsubachi-api.shiosalt.com'
+      assert_includes stdout.string, 'VITE_API_BASE_URL: https://mitsubachi-api.shiosalt.com'
+      assert_includes stdout.string, 'VITE_PUBLIC_TOKEN: <redacted>'
+      refute_includes stdout.string, 'visible-but-mask-this'
+    ensure
+      $stdout = original_stdout
+    end
+  end
+
+  def test_doctor_frontend_reports_missing_frontend_env_and_current_index
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      output = StringIO.new
+
+      MitsubachiInfra::Production.new(config: config, repo_root: ROOT, runner: RecordingRunner.new,
+                                      logger: output).doctor_frontend
+
+      assert_includes output.string, '[FRONTEND] env file: missing'
+      assert_includes output.string, '[FRONTEND] public index.html: missing'
+    end
+  end
+
   def test_frontend_output_directory_rejects_traversal
     data = config_data('frontend' => MitsubachiInfra::Configuration::DEFAULT.fetch('frontend').merge('output_directory' => '../dist'))
     assert_raises(MitsubachiInfra::ValidationError) { MitsubachiInfra::Configuration.new('/missing', data: data) }
@@ -493,6 +645,13 @@ class MitsubachiInfraTest < Minitest::Test
 
     assert result.success?
     assert_equal 'ok', result.stdout
+  end
+
+  def test_command_runner_rejects_nil_argv_before_execution
+    runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: true)
+
+    error = assert_raises(MitsubachiInfra::Error) { runner.run('echo', nil) }
+    assert_includes error.message, 'command argv must not contain nil'
   end
 
   def test_command_runner_runs_when_chdir_is_empty_string
@@ -753,6 +912,69 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_frontend_deploy_passes_vite_env_to_npm_build
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      runner = FrontendDeployRunner.new(dry_run: true)
+
+      MitsubachiInfra::Deployment::Frontend.new(config: config, runner: runner, health: FakeHealth.new,
+                                                logger: StringIO.new).deploy(ref: 'main')
+
+      build = runner.calls.find { |command, _options| command == %w[npm run build] }
+      refute_nil build
+      assert_equal 'https://mitsubachi-api.shiosalt.com', build.last.fetch(:env).fetch('VITE_API_BASE_URL')
+    end
+  end
+
+  def test_frontend_deploy_build_failure_does_not_switch_current
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      root = config.frontend_root
+      old = File.join(root, 'releases', 'old')
+      FileUtils.mkdir_p(old)
+      FileUtils.ln_sf(old, File.join(root, 'current'))
+      runner = FrontendDeployRunner.new(fail_build: true, dry_run: false)
+
+      assert_raises(MitsubachiInfra::CommandError) do
+        MitsubachiInfra::Deployment::Frontend.new(config: config, runner: runner, health: FakeHealth.new,
+                                                  logger: StringIO.new).deploy(ref: 'main')
+      end
+
+      assert_equal old, File.realpath(File.join(root, 'current'))
+    end
+  end
+
+  def test_frontend_deploy_fails_when_dist_index_is_missing
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      runner = FrontendDeployRunner.new(dry_run: false)
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::Deployment::Frontend.new(config: config, runner: runner, health: FakeHealth.new,
+                                                  logger: StringIO.new).deploy(ref: 'main')
+      end
+
+      assert_includes error.message, 'frontend build output missing index.html'
+    end
+  end
+
+  def test_install_does_not_overwrite_existing_frontend_env
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      frontend_path = config.fetch('paths').fetch('frontend_env')
+      FileUtils.mkdir_p(File.dirname(frontend_path))
+      File.write(frontend_path, "VITE_API_BASE_URL=http://192.168.10.151\n")
+
+      MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
+                                 .send(:install_env_files)
+
+      assert_equal "VITE_API_BASE_URL=http://192.168.10.151\n", File.read(frontend_path)
+    end
+  end
+
   def test_rails_command_uses_production_env_and_release_cwd
     Dir.mktmpdir do |dir|
       config = production_config(dir)
@@ -837,6 +1059,8 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, 'proxy_set_header X-Forwarded-Host $host;'
     assert_includes rendered, 'location /internal/storage/drive_items/'
     assert_includes rendered, 'internal;'
+    assert_includes rendered, 'add_header Cache-Control "no-cache";'
+    assert_includes rendered, 'add_header Cache-Control "public, max-age=31536000, immutable";'
   end
 
   def test_public_https_nginx_has_redirect_and_separate_ssl_servers

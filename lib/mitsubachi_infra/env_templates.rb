@@ -35,7 +35,8 @@ module MitsubachiInfra
     end
 
     def frontend_env(config)
-      "VITE_API_BASE_URL=https://#{config.api_host}\n"
+      api = config.public? ? "https://#{config.api_host}" : "http://#{config.fetch('server_ip')}"
+      "VITE_API_BASE_URL=#{api}\n"
     end
   end
 end

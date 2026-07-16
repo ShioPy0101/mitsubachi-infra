@@ -9,6 +9,7 @@ require_relative 'deployment/backend'
 require_relative 'deployment/frontend'
 require_relative 'deployment/rollback'
 require_relative 'errors'
+require_relative 'frontend_env'
 require_relative 'health_check'
 require_relative 'installer'
 require_relative 'lock'
@@ -46,8 +47,7 @@ module MitsubachiInfra
         @config.validate!
         production.production_check
       when 'doctor'
-        @config.validate!
-        production.doctor
+        doctor
       when 'mail-test' then mail_test
       when 'redeploy' then deploy_production_alias('all')
       when 'deploy-backend' then deploy_production_alias('backend')
@@ -60,6 +60,7 @@ module MitsubachiInfra
       when 'deploy' then deploy
       when 'rollback' then rollback
       when 'status' then status
+      when 'config' then config
       when 'https' then https
       else raise ValidationError, "unknown command: #{command}"
       end
@@ -98,6 +99,9 @@ module MitsubachiInfra
       target = @argv.first && !@argv.first.start_with?('-') ? @argv.shift : 'all'
       opts = {}
       OptionParser.new do |parser|
+        parser.on('--all') { target = 'all' }
+        parser.on('--backend') { target = 'backend' }
+        parser.on('--frontend') { target = 'frontend' }
         parser.on('--ref REF') { |v| opts[:ref] = v }
         parser.on('--backend-ref REF') { |v| opts[:backend_ref] = v }
         parser.on('--frontend-ref REF') { |v| opts[:frontend_ref] = v }
@@ -145,6 +149,34 @@ module MitsubachiInfra
                  health: HealthCheck.new(logger: $stderr)).print(json: opts[:json])
     end
 
+    def config
+      sub = @argv.shift || 'show'
+      raise ValidationError, 'config command must be show' unless sub == 'show'
+
+      @config.validate!
+      frontend_env = FrontendEnv.new(config: @config, logger: $stderr)
+      puts "Frontend URL: #{@config.public? ? "https://#{@config.frontend_host}" : "http://#{@config.fetch('server_ip')}"}"
+      puts "API URL: #{@config.public? ? "https://#{@config.api_host}" : "http://#{@config.fetch('server_ip')}"}"
+      puts "Frontend env file: #{@config.fetch('paths').fetch('frontend_env')}"
+      puts "VITE_API_BASE_URL: #{frontend_env.vite_api_base_url.empty? ? '(missing)' : frontend_env.vite_api_base_url}"
+      frontend_env.masked_entries.sort.each do |key, value|
+        next if key == FrontendEnv::VITE_API_BASE_URL
+
+        puts "#{key}: #{value}"
+      end
+    end
+
+    def doctor
+      @config.validate!
+      target = @argv.first && !@argv.first.start_with?('-') ? @argv.shift : nil
+      OptionParser.new.parse!(@argv)
+      case target
+      when 'frontend' then production.doctor_frontend
+      when nil then production.doctor
+      else raise ValidationError, 'doctor target must be frontend'
+      end
+    end
+
     def https
       sub = @argv.shift || 'status'
       opts = { staging: false, json: false }
@@ -176,6 +208,7 @@ module MitsubachiInfra
           mitsubachi-infra configure [--dry-run]
           mitsubachi-infra install [--interactive] [--remove-nginx-default-site] [--dry-run]
           mitsubachi-infra deploy [all|backend|frontend] [--ref REF] [--dry-run]
+          mitsubachi-infra deploy --all|--backend|--frontend [--ref REF] [--dry-run]
           mitsubachi-infra deploy-backend [--dry-run]
           mitsubachi-infra deploy-frontend [--dry-run]
           mitsubachi-infra redeploy [--dry-run]
@@ -183,9 +216,10 @@ module MitsubachiInfra
           mitsubachi-infra rollback-backend [--dry-run]
           mitsubachi-infra rollback-frontend [--dry-run]
           mitsubachi-infra production-check [--dry-run]
-          mitsubachi-infra doctor [--dry-run]
+          mitsubachi-infra doctor [frontend] [--dry-run]
           mitsubachi-infra mail-test --to ADDRESS [--dry-run]
           mitsubachi-infra status [--json]
+          mitsubachi-infra config show
           mitsubachi-infra https check [--dry-run]
           mitsubachi-infra https enable [--staging] [--dry-run]
           mitsubachi-infra https renew [--dry-run]

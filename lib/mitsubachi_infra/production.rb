@@ -14,6 +14,7 @@ require_relative 'certbot'
 require_relative 'deploy_user'
 require_relative 'env_templates'
 require_relative 'errors'
+require_relative 'frontend_env'
 require_relative 'health_check'
 require_relative 'nginx'
 require_relative 'node_runtime'
@@ -99,6 +100,7 @@ module MitsubachiInfra
                                                   else
                                                     'inactive'
                                                   end}")
+      frontend_doctor_lines.each { |line| @logger.puts(line) }
       @logger.puts("[LOCAL] Nginx validation: #{privileged_success?('nginx', '-t') ? 'ok' : 'failed'}")
       @logger.puts("[LOCAL] Minecraft ports preserved in configuration: #{minecraft_ports.join(', ')}")
       @logger.puts("[EXTERNAL] Frontend HTTPS: #{http_ok?(@config.production_frontend_url) ? 'OK' : 'not verified'}")
@@ -110,6 +112,10 @@ module MitsubachiInfra
       @logger.puts("[LOCAL] Git: #{success?('git', '--version') ? 'ok' : 'missing'}")
       @logger.puts("[LOCAL] Nginx: #{success?('which', 'nginx') ? 'ok' : 'missing'}")
       production_check
+    end
+
+    def doctor_frontend
+      frontend_doctor_lines.each { |line| @logger.puts(line) }
     end
 
     def mail_test(to:)
@@ -161,12 +167,17 @@ module MitsubachiInfra
                                    label: 'frontend')
       begin
         @runner.deploy('npm', 'ci', config: deploy_config, chdir: release, timeout: 1800)
+        env = FrontendEnv.new(config: @config, logger: @logger)
+        env.log_summary(build_dir: release)
         @runner.deploy(*app.fetch('build_command'), config: deploy_config, chdir: release, timeout: 1800,
-                                                    env: frontend_env)
-        index = File.join(release, app.fetch('output_directory'), 'index.html')
-        raise Error, "frontend build output missing index.html: #{index}" unless @runner.dry_run || File.exist?(index)
+                                                    env: env.build_env)
+        verify_frontend_build_output(release)
 
+        @logger.puts("[SWITCH] frontend current -> #{release}")
         activate(root, release)
+        privileged('nginx', '-t')
+        privileged('systemctl', 'reload', 'nginx')
+        HealthCheck.new(logger: @logger).check!(frontend_health_url, dry_run: @runner.dry_run)
         cleanup(root, keep: app.fetch('keep_releases'))
       rescue StandardError
         FileUtils.rm_rf(release) unless @runner.dry_run || current_release(root) == release
@@ -246,7 +257,14 @@ module MitsubachiInfra
         atomic_write(rails_path, EnvTemplates.rails_env(@config), owner: 'root', group: deploy_user,
                                                                   mode: '0640')
       end
-      atomic_write(frontend_path, EnvTemplates.frontend_env(@config), owner: 'root', group: deploy_user, mode: '0640')
+      if File.exist?(frontend_path)
+        @logger.puts("[LOCAL] keeping existing #{frontend_path}")
+      elsif @runner.dry_run
+        @logger.puts("[DRY-RUN] write #{frontend_path}")
+      else
+        atomic_write(frontend_path, EnvTemplates.frontend_env(@config), owner: 'root', group: deploy_user,
+                                                                  mode: '0640')
+      end
     end
 
     def install_systemd_units
@@ -329,20 +347,49 @@ module MitsubachiInfra
       raise Error, "missing Rails env keys: #{missing.join(', ')}" unless missing.empty? || @runner.dry_run
     end
 
-    def frontend_env
-      path = @config.fetch('paths').fetch('frontend_env')
-      return {} if @runner.dry_run && !File.exist?(path)
-
-      File.readlines(path, chomp: true).each_with_object({}) do |line, env|
-        next if line.strip.empty? || line.start_with?('#')
-
-        key, value = line.split('=', 2)
-        env[key] = value.to_s if key&.match?(/\A[A-Z0-9_]+\z/)
-      end
-    end
-
     def rails_command
       @rails_command ||= RailsCommand.new(config: deploy_config, runner: @runner)
+    end
+
+    def verify_frontend_build_output(release)
+      index = File.join(release, @config.fetch('frontend').fetch('output_directory'), 'index.html')
+      @logger.puts("[CHECK] #{index}")
+      raise Error, "frontend build output missing index.html: #{index}" unless @runner.dry_run || File.exist?(index)
+    end
+
+    def frontend_health_url
+      @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
+    end
+
+    def frontend_doctor_lines
+      env_path = @config.fetch('paths').fetch('frontend_env')
+      current = File.join(@config.fetch('paths').fetch('frontend_root'), 'current')
+      index = File.join(current, @config.fetch('frontend').fetch('output_directory'), 'index.html')
+      source = current_release(@config.fetch('paths').fetch('frontend_root')) || @config.frontend_repository_cache
+      package_json = File.join(source, 'package.json')
+      env = FrontendEnv.new(config: @config, logger: @logger)
+      [
+        "[FRONTEND] env file: #{File.exist?(env_path) ? 'ok' : 'missing'} #{env_path}",
+        "[FRONTEND] env owner/mode: #{frontend_env_mode(env_path)}",
+        "[FRONTEND] VITE_API_BASE_URL: #{env.vite_api_base_url.empty? ? 'missing' : env.vite_api_base_url}",
+        "[FRONTEND] node: #{success?('node', '--version') ? 'ok' : 'missing'}",
+        "[FRONTEND] npm: #{success?('npm', '--version') ? 'ok' : 'missing'}",
+        "[FRONTEND] source package.json: #{File.exist?(package_json) ? 'ok' : "missing #{package_json}"}",
+        "[FRONTEND] current symlink: #{File.symlink?(current) ? 'ok' : "missing #{current}"}",
+        "[FRONTEND] public index.html: #{File.exist?(index) ? 'ok' : "missing #{index}"}",
+        "[FRONTEND] nginx root: #{File.join(@config.fetch('paths').fetch('frontend_root'), 'current', @config.fetch('frontend').fetch('output_directory'))}"
+      ]
+    rescue Error => e
+      ["[FRONTEND] configuration error: #{e.message}"]
+    end
+
+    def frontend_env_mode(path)
+      return 'missing' unless File.exist?(path)
+
+      stat = File.stat(path)
+      "#{Etc.getpwuid(stat.uid).name}:#{Etc.getgrgid(stat.gid).name} #{format('%<mode>04o', mode: stat.mode & 0o777)}"
+    rescue StandardError => e
+      "unknown (#{e.message})"
     end
 
     def rollback_root(root, restart:)
