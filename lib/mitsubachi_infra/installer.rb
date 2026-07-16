@@ -28,6 +28,10 @@ module MitsubachiInfra
       exe/mitsubachi-infra
       lib/mitsubachi_infra.rb
       lib/mitsubachi_infra/cli.rb
+      lib/mitsubachi_infra/installer.rb
+      lib/mitsubachi_infra/nginx.rb
+      lib/mitsubachi_infra/systemd.rb
+      lib/mitsubachi_infra/frontend_env.rb
       templates/nginx/lan.conf.erb
       templates/nginx/public_http_challenge.conf.erb
       templates/nginx/public_https.conf.erb
@@ -104,8 +108,8 @@ module MitsubachiInfra
       FileUtils.rm_rf(tmp)
       FileUtils.mkdir_p(tmp)
       copy_cli_release(tmp)
-      FileUtils.chmod(0o755, File.join(tmp, 'bin', 'mitsubachi-infra'))
       validate_cli_release!(tmp)
+      FileUtils.chmod(0o755, File.join(tmp, 'bin', 'mitsubachi-infra'))
       FileUtils.mv(tmp, release)
       release_created = true
       @runner.run('chown', '-R', 'root:root', release) if Process.euid.zero?
@@ -130,7 +134,8 @@ module MitsubachiInfra
 
     def copy_cli_release(tmp)
       %w[bin exe lib templates].each do |name|
-        FileUtils.cp_r(File.join(@repo_root, name), tmp)
+        source = File.join(@repo_root, name)
+        FileUtils.cp_r(source, tmp) if File.exist?(source)
       end
       %w[env config].each do |name|
         source = File.join(@repo_root, name)

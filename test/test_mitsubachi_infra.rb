@@ -410,6 +410,10 @@ class MitsubachiInfraTest < Minitest::Test
       'exe/mitsubachi-infra',
       'lib/mitsubachi_infra.rb',
       'lib/mitsubachi_infra/cli.rb',
+      'lib/mitsubachi_infra/installer.rb',
+      'lib/mitsubachi_infra/nginx.rb',
+      'lib/mitsubachi_infra/systemd.rb',
+      'lib/mitsubachi_infra/frontend_env.rb',
       'templates/nginx/lan.conf.erb',
       'templates/nginx/public_http_challenge.conf.erb',
       'templates/nginx/public_https.conf.erb',
@@ -1167,8 +1171,14 @@ class MitsubachiInfraTest < Minitest::Test
       assert_path_exists File.join(release, 'exe', 'mitsubachi-infra')
       assert_path_exists File.join(release, 'lib', 'mitsubachi_infra.rb')
       assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'cli.rb')
+      assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'installer.rb')
+      assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'nginx.rb')
+      assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'systemd.rb')
+      assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'frontend_env.rb')
       assert_path_exists File.join(release, 'env', 'config.yml.example')
       assert_path_exists File.join(release, 'config', 'local.env.example')
+      refute_path_exists File.join(release, 'templates', 'templates')
+      refute_path_exists File.join(release, 'lib', 'lib')
       expected_templates = Dir.glob(File.join(ROOT, 'templates', '**', '*')).select { |path| File.file?(path) }
                               .map { |path| path.delete_prefix("#{ROOT}/") }.sort
       actual_templates = Dir.glob(File.join(release, 'templates', '**', '*')).select { |path| File.file?(path) }
@@ -1181,6 +1191,36 @@ class MitsubachiInfraTest < Minitest::Test
                                             repo_root: release).render(mode: 'public_http_challenge')
       assert_includes rendered, 'server_name mitsubachi.shiosalt.com'
       assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com'
+    end
+  end
+
+  def test_cli_install_rejects_bin_lib_only_release_candidate_before_current_switch
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      old = File.join(cli_root, 'releases', 'old')
+      bad_repo = File.join(dir, 'bad-repo')
+      FileUtils.mkdir_p(File.join(old, 'bin'))
+      File.write(File.join(old, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      FileUtils.ln_sf(old, File.join(cli_root, 'current'))
+      FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
+      FileUtils.mkdir_p(File.join(bad_repo, 'bin'))
+      FileUtils.mkdir_p(File.join(bad_repo, 'lib', 'mitsubachi_infra'))
+      File.write(File.join(bad_repo, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      File.write(File.join(bad_repo, 'lib', 'mitsubachi_infra', 'cli.rb'), "# frozen_string_literal: true\n")
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                       repo_root: bad_repo, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+      end
+
+      assert_includes error.message, 'CLI release is missing required files'
+      assert_includes error.message, 'templates/nginx/public_http_challenge.conf.erb'
+      assert_includes error.message, 'lib/mitsubachi_infra/installer.rb'
+      assert_equal old, File.realpath(File.join(cli_root, 'current'))
+      assert_empty Dir.glob(File.join(cli_root, 'releases', '*.tmp'))
+      assert_equal [old], Dir.glob(File.join(cli_root, 'releases', '*')).select { |path| File.directory?(path) }
     end
   end
 
@@ -1319,7 +1359,10 @@ class MitsubachiInfraTest < Minitest::Test
       installer = MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
                                                  repo_root: bad_repo, cli_root: cli_root, cli_link: cli_link)
 
-      assert_raises(Errno::ENOENT) { installer.send(:install_cli) }
+      error = assert_raises(MitsubachiInfra::Error) { installer.send(:install_cli) }
+
+      assert_includes error.message, 'CLI release is missing required files'
+      assert_includes error.message, 'templates/nginx/public_http_challenge.conf.erb'
       refute_path_exists cli_link
       assert_empty Dir.glob(File.join(cli_root, 'releases', '*.tmp'))
     end
