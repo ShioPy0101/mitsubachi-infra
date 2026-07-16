@@ -12,11 +12,13 @@ $LOAD_PATH.unshift(File.join(ROOT, 'lib'))
 
 require 'mitsubachi_infra/command_runner'
 require 'mitsubachi_infra/configuration'
-require 'mitsubachi_infra/caddy'
+require 'mitsubachi_infra/env_templates'
+require 'mitsubachi_infra/health_check'
 require 'mitsubachi_infra/nginx'
 require 'mitsubachi_infra/deployment/release_manager'
 require 'mitsubachi_infra/errors'
 require 'mitsubachi_infra/production'
+require 'mitsubachi_infra/systemd'
 
 class MitsubachiInfraTest < Minitest::Test
   class RecordingRunner
@@ -115,6 +117,27 @@ class MitsubachiInfraTest < Minitest::Test
     paths
   end
 
+  def capture_health_request
+    captured = nil
+    response = Struct.new(:code).new('200')
+    fake_http = Object.new
+    fake_http.define_singleton_method(:request) do |request|
+      captured = request
+      response
+    end
+    Net::HTTP.singleton_class.alias_method(:mitsubachi_original_start, :start)
+    Net::HTTP.define_singleton_method(:start) do |_host, _port, **_options, &block|
+      block.call(fake_http)
+    end
+    yield 'http://127.0.0.1:3000/api/health/ready'
+    captured
+  ensure
+    if Net::HTTP.singleton_class.method_defined?(:mitsubachi_original_start)
+      Net::HTTP.singleton_class.alias_method(:start, :mitsubachi_original_start)
+      Net::HTTP.singleton_class.remove_method(:mitsubachi_original_start)
+    end
+  end
+
   def test_invalid_deployment_mode
     assert_raises(MitsubachiInfra::ValidationError) do
       MitsubachiInfra::Configuration.new('/missing', data: config_data('deployment_mode' => 'bad'))
@@ -135,6 +158,26 @@ class MitsubachiInfraTest < Minitest::Test
                        'https' => { 'host' => 'files.example.com', 'email' => 'ops@example.com',
                                     'challenge' => 'http-01' })
     assert_equal 'public', MitsubachiInfra::Configuration.new('/missing', data: data).fetch('deployment_mode')
+  end
+
+  def test_rails_env_public_hosts
+    config = production_config('/tmp/mitsubachi-test')
+    rendered = MitsubachiInfra::EnvTemplates.rails_env(config)
+
+    assert_includes rendered, 'APP_HOST=mitsubachi-api.shiosalt.com'
+    assert_includes rendered, 'ALLOWED_HOSTS=mitsubachi-api.shiosalt.com,127.0.0.1,localhost'
+  end
+
+  def test_rails_env_lan_hosts
+    config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+      'deployment_mode' => 'lan',
+      'server_ip' => '192.168.1.50',
+      'https' => MitsubachiInfra::Configuration::DEFAULT.fetch('https')
+    ))
+    rendered = MitsubachiInfra::EnvTemplates.rails_env(config)
+
+    assert_includes rendered, 'APP_HOST=192.168.1.50'
+    assert_includes rendered, 'ALLOWED_HOSTS=192.168.1.50,127.0.0.1,localhost'
   end
 
   def test_frontend_output_directory_rejects_traversal
@@ -263,6 +306,64 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi.shiosalt.com/fullchain.pem'
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem'
     assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
+  end
+
+  def test_health_check_sends_public_host_header
+    request = capture_health_request do |url|
+      MitsubachiInfra::HealthCheck.new(logger: StringIO.new).check!(url, host: 'mitsubachi-api.shiosalt.com')
+    end
+
+    assert_equal 'mitsubachi-api.shiosalt.com', request['Host']
+  end
+
+  def test_health_check_sends_lan_host_header
+    request = capture_health_request do |url|
+      MitsubachiInfra::HealthCheck.new(logger: StringIO.new).check!(url, host: '192.168.1.50')
+    end
+
+    assert_equal '192.168.1.50', request['Host']
+  end
+
+  def test_generated_files_do_not_reference_3001
+    paths = %w[
+      README.md
+      docs/commands.md
+      docs/environment-variables.md
+      docs/mail-delivery.md
+      docs/production-deployment.md
+      docs/troubleshooting.md
+      env/rails.env.example
+      nginx/mitsubachi-local.conf
+      scripts/deploy_api.sh
+      scripts/rollback_api.sh
+      scripts/verify_installation.sh
+      templates/nginx/lan.conf.erb
+      templates/nginx/public_http_challenge.conf.erb
+      templates/nginx/public_https.conf.erb
+      templates/systemd/mitsubachi-api.service.erb
+    ]
+    offenders = paths.select { |path| File.read(File.join(ROOT, path)).include?('3001') }
+
+    assert_empty offenders
+  end
+
+  def test_systemd_commands_restart_and_enable_worker_now
+    runner = RecordingRunner.new
+    systemd = MitsubachiInfra::Systemd.new(runner: runner)
+    systemd.restart('mitsubachi-api.service')
+    systemd.enable_now('mitsubachi-worker.service')
+
+    assert_includes runner.commands, %w[systemctl restart mitsubachi-api.service]
+    assert_includes runner.commands, %w[systemctl enable --now mitsubachi-worker.service]
+  end
+
+  def test_production_rejects_active_caddy_before_nginx
+    config = production_config('/tmp/mitsubachi-test')
+    runner = RecordingRunner.new
+    production = MitsubachiInfra::Production.new(config: config, repo_root: ROOT, runner: runner, logger: StringIO.new)
+
+    error = assert_raises(MitsubachiInfra::Error) { production.send(:reject_caddy_conflict!) }
+    assert_includes error.message, 'Caddy is active'
   end
 
   def test_nginx_can_render_explicit_default_server
@@ -452,7 +553,6 @@ class MitsubachiInfraTest < Minitest::Test
         'frontend_root' => File.join(root, 'frontend'),
         'rails_env' => File.join(root, 'etc', 'rails.env'),
         'frontend_env' => File.join(root, 'etc', 'frontend.env'),
-        'caddyfile' => File.join(root, 'etc', 'Caddyfile'),
         'server_id' => File.join(root, 'etc', 'server-id')
       },
       'ports' => {
@@ -469,16 +569,15 @@ class MitsubachiInfraTest < Minitest::Test
     ))
   end
 
-  def test_caddyfile_renders_frontend_and_api_domains
+  def test_nginx_public_template_renders_frontend_and_api_domains
     Dir.mktmpdir do |dir|
       config = production_config(dir)
-      runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: true)
-      caddy = MitsubachiInfra::Caddy.new(config: config, runner: runner, repo_root: ROOT)
-      rendered = caddy.render
+      rendered = MitsubachiInfra::Nginx.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
+                                  .render(mode: 'public_https')
       assert_includes rendered, 'mitsubachi.shiosalt.com'
       assert_includes rendered, 'mitsubachi-api.shiosalt.com'
-      assert_includes rendered, 'try_files {path} /index.html'
-      assert_includes rendered, 'reverse_proxy 127.0.0.1:3000'
+      assert_includes rendered, 'try_files $uri $uri/ /index.html'
+      assert_includes rendered, 'proxy_pass http://127.0.0.1:3000'
     end
   end
 

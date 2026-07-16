@@ -56,8 +56,8 @@ run_expect_success "backup postgres legacy help" bash "${ROOT}/scripts/backup_po
 
 grep -F 'EnvironmentFile=<%= @config.fetch("paths").fetch("rails_env") %>' "${ROOT}/templates/systemd/mitsubachi-api.service.erb" >/dev/null || fail "systemd template reads rails env"
 grep -F 'bundle exec bin/jobs' "${ROOT}/templates/systemd/mitsubachi-jobs.service.erb" >/dev/null || fail "worker systemd template runs bin/jobs"
-grep -F 'reverse_proxy 127.0.0.1:<%= config.fetch("ports").fetch("rails") %>' "${ROOT}/templates/caddy/Caddyfile.erb" >/dev/null || fail "Caddy proxies API to localhost Rails"
-grep -F 'try_files {path} /index.html' "${ROOT}/templates/caddy/Caddyfile.erb" >/dev/null || fail "Caddy template has SPA fallback"
+grep -F 'proxy_pass http://127.0.0.1:<%= config.fetch("ports").fetch("rails") %>;' "${ROOT}/templates/nginx/public_https.conf.erb" >/dev/null || fail "Nginx proxies API to localhost Rails"
+grep -F 'try_files $uri $uri/ /index.html;' "${ROOT}/templates/nginx/public_https.conf.erb" >/dev/null || fail "Nginx public template has SPA fallback"
 # shellcheck disable=SC2016
 grep -F 'try_files $uri $uri/ /index.html;' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan template has SPA fallback"
 grep -F 'location /api/' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan keeps api proxy"
