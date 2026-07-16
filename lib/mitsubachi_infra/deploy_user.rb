@@ -34,8 +34,10 @@ module MitsubachiInfra
         @runner.run('chmod', '0644', known_hosts)
       end
       @runner.run('install', '-d', '-o', user, '-g', user, '-m', '0755', @config.fetch('deploy').fetch('app_root'))
-      @runner.run('install', '-d', '-o', user, '-g', user, '-m', '0755', @config.backend_root, @config.frontend_root,
-                  @config.repositories_root)
+      @runner.run('install', '-d', '-o', user, '-g', user, '-m', '0755',
+                  @config.backend_root, File.join(@config.backend_root, 'releases'), @config.backend_repository_cache,
+                  @config.frontend_root, File.join(@config.frontend_root, 'releases'),
+                  @config.frontend_repository_cache)
     end
 
     private

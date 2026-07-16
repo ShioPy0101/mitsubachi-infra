@@ -11,12 +11,12 @@ module MitsubachiInfra
       @logger = logger
     end
 
-    def check!(url, attempts: 10, delay: 2, dry_run: false)
-      @logger.puts("[DRY-RUN] health check #{url}") if dry_run
+    def check!(url, attempts: 10, delay: 2, dry_run: false, host: nil)
+      @logger.puts("[DRY-RUN] health check #{url}#{host ? " Host=#{host}" : ''}") if dry_run
       return true if dry_run
 
       attempts.times do |index|
-        code = http_code(url)
+        code = http_code(url, host: host)
         return true if code == 200
 
         @logger.puts("health check waiting #{index + 1}/#{attempts}: #{url} status=#{code || 'error'}")
@@ -27,10 +27,12 @@ module MitsubachiInfra
 
     private
 
-    def http_code(url)
+    def http_code(url, host:)
       uri = URI(url)
       Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 5, open_timeout: 5) do |http|
-        http.get(uri.request_uri).code.to_i
+        request = Net::HTTP::Get.new(uri.request_uri)
+        request['Host'] = host if host
+        http.request(request).code.to_i
       end
     rescue StandardError
       nil

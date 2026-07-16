@@ -14,6 +14,10 @@ module MitsubachiInfra
       @runner.run('systemctl', 'enable', unit)
     end
 
+    def enable_now(unit)
+      @runner.run('systemctl', 'enable', '--now', unit)
+    end
+
     def restart(unit)
       @runner.run('systemctl', 'restart', unit)
     end

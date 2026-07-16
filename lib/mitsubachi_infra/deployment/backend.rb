@@ -20,7 +20,7 @@ module MitsubachiInfra
         deploy_user = @config.fetch('deploy').fetch('user')
         manager = ReleaseManager.new(root: @config.backend_root, runner: @runner, keep: app.fetch('keep_releases'))
         manager.ensure_dirs(owner: deploy_user)
-        repo = File.join(@config.repositories_root, 'backend.git')
+        repo = @config.backend_repository_cache
         fetch_repository(app.fetch('repository'), repo, ref || app.fetch('ref'))
         sha = @runner.deploy('git', "--git-dir=#{repo}", 'rev-parse', '--verify',
                              "#{ref || app.fetch('ref')}^{commit}", config: @config).stdout.strip
@@ -36,7 +36,7 @@ module MitsubachiInfra
           @runner.deploy('bundle', 'exec', 'rails', 'db:migrate', config: @config, chdir: release, timeout: 1800)
           manager.activate(release) unless @runner.dry_run
           @systemd.restart(SERVICE)
-          @health.check!(backend_health_url, dry_run: @runner.dry_run)
+          @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
           manager.cleanup(protected_paths: [previous].compact)
         rescue StandardError
           FileUtils.rm_rf(release) unless @runner.dry_run || manager.current_release == release
@@ -99,9 +99,9 @@ module MitsubachiInfra
 
       def backend_health_url
         if @config.public?
-          "https://#{@config.fetch('domains').fetch('api')}#{@config.fetch('backend').fetch('health_path')}"
+          "https://#{@config.fetch('domains').fetch('api')}#{@config.fetch('backend').fetch('health_path')}/ready"
         else
-          "http://#{@config.fetch('server_ip')}#{@config.fetch('backend').fetch('health_path')}"
+          "http://#{@config.fetch('server_ip')}#{@config.fetch('backend').fetch('health_path')}/ready"
         end
       end
     end

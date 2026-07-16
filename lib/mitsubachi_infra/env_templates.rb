@@ -5,15 +5,15 @@ module MitsubachiInfra
     module_function
 
     def rails_env(config)
-      api = config.fetch('domains').fetch('api')
-      frontend = "https://#{config.fetch('domains').fetch('frontend')}"
+      frontend = config.public? ? "https://#{config.fetch('domains').fetch('frontend')}" : "http://#{config.fetch('server_ip')}"
       <<~ENV
         RAILS_ENV=production
         RACK_ENV=production
         RAILS_LOG_TO_STDOUT=true
         RAILS_SERVE_STATIC_FILES=false
 
-        APP_HOST=#{api}
+        APP_HOST=#{config.app_host}
+        ALLOWED_HOSTS=#{config.allowed_hosts.join(',')}
         FRONTEND_ORIGIN=#{frontend}
         FRONTEND_URL=#{frontend}
 
@@ -29,6 +29,7 @@ module MitsubachiInfra
 
         RESEND_API_KEY=
         MAIL_FROM=
+        PORT=#{config.fetch('ports').fetch('rails')}
       ENV
     end
 

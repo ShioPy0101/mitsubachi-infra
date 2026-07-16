@@ -29,7 +29,6 @@ module MitsubachiInfra
         'frontend_root' => '/var/www/mitsubachi-frontend',
         'rails_env' => '/etc/mitsubachi/rails.env',
         'frontend_env' => '/etc/mitsubachi/frontend.env',
-        'caddyfile' => '/etc/caddy/Caddyfile',
         'server_id' => '/etc/mitsubachi/server-id'
       },
       'ports' => {
@@ -86,15 +85,35 @@ module MitsubachiInfra
     end
 
     def backend_root
-      File.join(fetch('deploy').fetch('app_root'), 'backend')
+      fetch('paths').fetch('rails_root')
     end
 
     def frontend_root
-      File.join(fetch('deploy').fetch('app_root'), 'frontend')
+      fetch('paths').fetch('frontend_root')
     end
 
     def repositories_root
-      File.join(fetch('deploy').fetch('app_root'), 'repositories')
+      fetch('paths').fetch('rails_root')
+    end
+
+    def backend_repository_cache
+      File.join(fetch('paths').fetch('rails_root'), 'repo')
+    end
+
+    def frontend_repository_cache
+      File.join(fetch('paths').fetch('frontend_root'), 'repo')
+    end
+
+    def app_host
+      public? ? fetch('domains').fetch('api') : fetch('server_ip')
+    end
+
+    def allowed_hosts
+      [app_host, '127.0.0.1', 'localhost'].uniq
+    end
+
+    def health_host
+      app_host
     end
 
     def production_frontend_url
@@ -190,7 +209,7 @@ module MitsubachiInfra
     def validate_production_schema!
       %w[frontend api].each { |key| validate_public_host!(data.fetch('domains').fetch(key)) }
       paths = data.fetch('paths')
-      %w[rails_root frontend_root rails_env frontend_env caddyfile server_id].each do |key|
+      %w[rails_root frontend_root rails_env frontend_env server_id].each do |key|
         value = paths.fetch(key)
         present!(value, "paths.#{key}")
         raise ValidationError, "paths.#{key} must be absolute" unless value.start_with?('/')

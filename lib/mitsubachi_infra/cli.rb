@@ -41,8 +41,8 @@ module MitsubachiInfra
       when 'deploy-frontend' then deploy_production_alias('frontend')
       when 'rollback-backend' then locked { production.rollback('backend') }
       when 'rollback-frontend' then locked { production.rollback('frontend') }
-      when 'caddy-install' then locked { production.bootstrap }
-      when 'caddy-configure' then locked { production.bootstrap }
+      when 'caddy-install', 'caddy-configure'
+        raise ValidationError, 'Caddy commands are retired; use Nginx + Certbot install/https commands'
       when 'install' then install
       when 'deploy' then deploy
       when 'rollback' then rollback
@@ -161,8 +161,6 @@ module MitsubachiInfra
           mitsubachi-infra production-check [--dry-run]
           mitsubachi-infra doctor [--dry-run]
           mitsubachi-infra mail-test --to ADDRESS [--dry-run]
-          mitsubachi-infra caddy-install [--dry-run]
-          mitsubachi-infra caddy-configure [--dry-run]
           mitsubachi-infra status [--json]
           mitsubachi-infra https check|enable|renew|status [--staging] [--dry-run]
       USAGE

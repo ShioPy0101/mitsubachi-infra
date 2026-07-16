@@ -17,7 +17,7 @@ module MitsubachiInfra
         deploy_user = @config.fetch('deploy').fetch('user')
         manager = ReleaseManager.new(root: @config.frontend_root, runner: @runner, keep: app.fetch('keep_releases'))
         manager.ensure_dirs(owner: deploy_user)
-        repo = File.join(@config.repositories_root, 'frontend.git')
+        repo = @config.frontend_repository_cache
         fetch_repository(app.fetch('repository'), repo, ref || app.fetch('ref'))
         sha = @runner.deploy('git', "--git-dir=#{repo}", 'rev-parse', '--verify',
                              "#{ref || app.fetch('ref')}^{commit}", config: @config).stdout.strip

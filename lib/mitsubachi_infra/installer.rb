@@ -34,6 +34,7 @@ module MitsubachiInfra
       install_cli
       install_directories
       install_templates
+      verify_install
     end
 
     private
@@ -44,25 +45,27 @@ module MitsubachiInfra
     end
 
     def install_directories
-      root = @config.fetch('deploy').fetch('app_root')
-      %w[backend frontend repositories].each do |dir|
-        @runner.run('install', '-d', '-o', @config.fetch('deploy').fetch('user'), '-g',
-                    @config.fetch('deploy').fetch('user'), '-m', '0755', File.join(root, dir))
-      end
+      deploy_user = @config.fetch('deploy').fetch('user')
+      @runner.run('install', '-d', '-o', deploy_user, '-g', deploy_user, '-m', '0755',
+                  @config.backend_root, File.join(@config.backend_root, 'releases'), @config.backend_repository_cache,
+                  @config.frontend_root, File.join(@config.frontend_root, 'releases'),
+                  @config.frontend_repository_cache)
       @runner.run('install', '-d', '-o', 'root', '-g', 'root', '-m', '0755', '/var/lib/mitsubachi/acme')
       @runner.run('install', '-d', '-o', 'root', '-g', @config.fetch('deploy').fetch('user'), '-m', '0750',
                   '/etc/mitsubachi')
     end
 
     def install_templates
+      systemd = Systemd.new(runner: @runner)
       nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
       nginx.install(mode: @config.public? ? 'public_http_challenge' : 'lan',
                     remove_default_site: remove_nginx_default_site?)
       install_systemd_unit('mitsubachi-api.service', 'mitsubachi-api.service.erb')
       install_systemd_unit('mitsubachi-worker.service', 'mitsubachi-jobs.service.erb')
-      Systemd.new(runner: @runner).daemon_reload
-      Systemd.new(runner: @runner).enable('mitsubachi-api.service')
-      Systemd.new(runner: @runner).enable('mitsubachi-worker.service')
+      systemd.daemon_reload
+      systemd.enable('mitsubachi-api.service')
+      systemd.restart('mitsubachi-api.service')
+      systemd.enable_now('mitsubachi-worker.service')
       enable_https_if_possible(nginx) if @config.public?
     end
 
@@ -88,6 +91,19 @@ module MitsubachiInfra
       return @remove_nginx_default_site unless @remove_nginx_default_site.nil?
 
       @config.fetch('nginx').fetch('remove_default_site')
+    end
+
+    def verify_install
+      @runner.run('nginx', '-t')
+      @runner.run('systemctl', 'is-active', '--quiet', 'mitsubachi-api.service')
+      @runner.run('systemctl', 'is-active', '--quiet', 'mitsubachi-worker.service')
+      health_url = "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/ready"
+      @runner.run('curl', '-fsS', '-H', "Host: #{@config.health_host}", health_url)
+      nginx_url = @config.public? ? "http://127.0.0.1#{@config.fetch('backend').fetch('health_path')}/ready" : "http://#{@config.fetch('server_ip')}#{@config.fetch('backend').fetch('health_path')}/ready"
+      @runner.run('curl', '-fsS', '-H', "Host: #{@config.health_host}", nginx_url)
+      @runner.run('ss', '-ltn')
+      @runner.deploy('ruby', '-e', "abort RUBY_VERSION unless RUBY_VERSION == #{@config.fetch('runtime').fetch('ruby_version').inspect}",
+                     config: @config)
     end
   end
 end

@@ -10,7 +10,6 @@ require 'securerandom'
 require 'time'
 require 'tmpdir'
 require 'uri'
-require_relative 'caddy'
 require_relative 'certbot'
 require_relative 'deploy_user'
 require_relative 'env_templates'
@@ -43,6 +42,7 @@ module MitsubachiInfra
       install_systemd_units
       install_nginx
       configure_ufw
+      verify_install
       production_check
     end
 
@@ -99,7 +99,7 @@ module MitsubachiInfra
       @logger.puts("[LOCAL] Nginx validation: #{privileged_success?('nginx', '-t') ? 'ok' : 'failed'}")
       @logger.puts("[LOCAL] Minecraft ports preserved in configuration: #{minecraft_ports.join(', ')}")
       @logger.puts("[EXTERNAL] Frontend HTTPS: #{http_ok?(@config.production_frontend_url) ? 'OK' : 'not verified'}")
-      @logger.puts("[EXTERNAL] API HTTPS: #{http_ok?("#{@config.production_api_url}#{@config.fetch('backend').fetch('health_path')}") ? 'OK' : 'not verified'}")
+      @logger.puts("[EXTERNAL] API HTTPS: #{http_ok?("#{@config.production_api_url}#{@config.fetch('backend').fetch('health_path')}/ready") ? 'OK' : 'not verified'}")
     end
 
     def doctor
@@ -140,6 +140,7 @@ module MitsubachiInfra
         privileged('systemctl', 'restart', JOBS_SERVICE)
         privileged('systemctl', 'is-active', '--quiet', API_SERVICE)
         privileged('systemctl', 'is-active', '--quiet', JOBS_SERVICE)
+        HealthCheck.new(logger: @logger).check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
         cleanup(root, keep: app.fetch('keep_releases'), protected_paths: [previous].compact)
       rescue StandardError
         FileUtils.rm_rf(release) unless @runner.dry_run || current_release(root) == release
@@ -249,12 +250,15 @@ module MitsubachiInfra
         content = ERB.new(File.read(File.join(@repo_root, 'templates', 'systemd', template)),
                           trim_mode: '-').result(binding)
         atomic_write("/etc/systemd/system/#{unit}", content, owner: 'root', group: 'root', mode: '0644')
-        privileged('systemctl', 'enable', unit)
       end
       privileged('systemctl', 'daemon-reload')
+      privileged('systemctl', 'enable', API_SERVICE)
+      privileged('systemctl', 'restart', API_SERVICE, allow_failure: true)
+      privileged('systemctl', 'enable', '--now', JOBS_SERVICE)
     end
 
     def install_nginx
+      reject_caddy_conflict!
       nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
       nginx.install(mode: @config.public? ? 'public_http_challenge' : 'lan')
       return unless @config.public?
@@ -263,6 +267,27 @@ module MitsubachiInfra
                   health: HealthCheck.new(logger: @logger)).enable(staging: @config.fetch('https').fetch('staging'))
     rescue Error => e
       @logger.puts("warning: HTTPS enable failed; keeping HTTP configuration: #{e.message}")
+    end
+
+    def reject_caddy_conflict!
+      return if @runner.dry_run
+      return unless privileged_success?('systemctl', 'is-active', '--quiet', 'caddy')
+
+      raise Error, 'Caddy is active; stop/disable Caddy before installing Nginx on 80/443'
+    end
+
+    def verify_install
+      privileged('nginx', '-t')
+      privileged('systemctl', 'is-active', '--quiet', API_SERVICE)
+      privileged('systemctl', 'is-active', '--quiet', JOBS_SERVICE)
+      health_path = "#{@config.fetch('backend').fetch('health_path')}/ready"
+      privileged('curl', '-fsS', '-H', "Host: #{@config.health_host}",
+                 "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{health_path}")
+      privileged('curl', '-fsS', '-H', "Host: #{@config.health_host}", "http://127.0.0.1#{health_path}")
+      privileged('ss', '-ltn')
+      @runner.deploy('ruby', '-e',
+                     "abort RUBY_VERSION unless RUBY_VERSION == #{@config.fetch('runtime').fetch('ruby_version').inspect}",
+                     config: deploy_config)
     end
 
     def configure_ufw

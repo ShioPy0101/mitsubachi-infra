@@ -39,7 +39,7 @@ module MitsubachiInfra
         warn 'backend rollback does not roll back DB migrations'
         manager.activate(target) unless @runner.dry_run
         @systemd.restart('mitsubachi-api.service')
-        @health.check!(backend_health_url, dry_run: @runner.dry_run)
+        @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
       end
 
       def rollback_frontend
@@ -57,7 +57,7 @@ module MitsubachiInfra
       end
 
       def backend_health_url
-        @config.public? ? "https://#{@config.fetch('domains').fetch('api')}/api/health" : "http://#{@config.fetch('server_ip')}/api/health"
+        @config.public? ? "https://#{@config.fetch('domains').fetch('api')}/api/health/ready" : "http://#{@config.fetch('server_ip')}/api/health/ready"
       end
 
       def frontend_health_url

@@ -20,7 +20,6 @@ paths:
   frontend_root: /var/www/mitsubachi-frontend
   rails_env: /etc/mitsubachi/rails.env
   frontend_env: /etc/mitsubachi/frontend.env
-  caddyfile: /etc/caddy/Caddyfile
   server_id: /etc/mitsubachi/server-id
 
 ports:
