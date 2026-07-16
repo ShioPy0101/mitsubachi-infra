@@ -11,14 +11,19 @@ require 'time'
 require 'tmpdir'
 require 'uri'
 require_relative 'caddy'
+require_relative 'certbot'
+require_relative 'deploy_user'
 require_relative 'env_templates'
 require_relative 'errors'
+require_relative 'health_check'
+require_relative 'nginx'
+require_relative 'ruby_runtime'
 require_relative 'systemd'
 
 module MitsubachiInfra
   class Production
     API_SERVICE = 'mitsubachi-api.service'
-    JOBS_SERVICE = 'mitsubachi-jobs.service'
+    JOBS_SERVICE = 'mitsubachi-worker.service'
 
     def initialize(config:, repo_root:, runner:, logger:)
       @config = config
@@ -32,11 +37,11 @@ module MitsubachiInfra
       check_server_id(allow_create: true)
       install_packages
       ensure_deploy_user
+      RubyRuntime.new(config: deploy_config, runner: @runner).ensure!
       install_directories
       install_env_files
       install_systemd_units
-      Caddy.new(config: @config, runner: @runner, repo_root: @repo_root).install
-      Caddy.new(config: @config, runner: @runner, repo_root: @repo_root).configure
+      install_nginx
       configure_ufw
       production_check
     end
@@ -73,8 +78,8 @@ module MitsubachiInfra
       check_server_id unless @runner.dry_run
       @logger.puts('[LOCAL] Running on production host')
       @logger.puts("[LOCAL] Deploy user: #{success?('id', deploy_user) ? 'ok' : 'missing'}")
-      @logger.puts("[LOCAL] Caddy active: #{if privileged_success?('systemctl', 'is-active', '--quiet',
-                                                                   'caddy')
+      @logger.puts("[LOCAL] Nginx active: #{if privileged_success?('systemctl', 'is-active', '--quiet',
+                                                                   'nginx')
                                               'yes'
                                             else
                                               'no'
@@ -91,12 +96,7 @@ module MitsubachiInfra
                                                   else
                                                     'inactive'
                                                   end}")
-      @logger.puts("[LOCAL] Caddyfile validation: #{if privileged_success?('caddy', 'validate', '--config',
-                                                                           @config.fetch('paths').fetch('caddyfile'))
-                                                      'ok'
-                                                    else
-                                                      'failed'
-                                                    end}")
+      @logger.puts("[LOCAL] Nginx validation: #{privileged_success?('nginx', '-t') ? 'ok' : 'failed'}")
       @logger.puts("[LOCAL] Minecraft ports preserved in configuration: #{minecraft_ports.join(', ')}")
       @logger.puts("[EXTERNAL] Frontend HTTPS: #{http_ok?(@config.production_frontend_url) ? 'OK' : 'not verified'}")
       @logger.puts("[EXTERNAL] API HTTPS: #{http_ok?("#{@config.production_api_url}#{@config.fetch('backend').fetch('health_path')}") ? 'OK' : 'not verified'}")
@@ -105,7 +105,7 @@ module MitsubachiInfra
     def doctor
       @logger.puts("[LOCAL] Ruby: #{RUBY_VERSION}")
       @logger.puts("[LOCAL] Git: #{success?('git', '--version') ? 'ok' : 'missing'}")
-      @logger.puts("[LOCAL] Caddy: #{success?('which', 'caddy') ? 'ok' : 'missing'}")
+      @logger.puts("[LOCAL] Nginx: #{success?('which', 'nginx') ? 'ok' : 'missing'}")
       production_check
     end
 
@@ -215,15 +215,12 @@ module MitsubachiInfra
     def install_packages
       privileged('apt-get', 'update', timeout: 1800)
       privileged('apt-get', 'install', '-y', 'git', 'curl', 'ca-certificates', 'build-essential', 'ruby-full',
-                 'postgresql-client', 'ufw', 'rsync', 'nodejs', 'npm', 'caddy', timeout: 1800)
+                 'postgresql-client', 'nginx', 'ufw', 'certbot', 'python3-certbot-nginx', 'rsync', 'nodejs', 'npm',
+                 timeout: 1800)
     end
 
     def ensure_deploy_user
-      return if success?('id', deploy_user)
-
-      privileged('useradd', '--system', '--user-group', '--create-home', '--home-dir', "/home/#{deploy_user}",
-                 '--shell', '/bin/bash', deploy_user)
-      privileged('install', '-d', '-o', deploy_user, '-g', deploy_user, '-m', '0700', "/home/#{deploy_user}/.ssh")
+      DeployUser.new(config: deploy_config, runner: @runner).ensure!
     end
 
     def install_directories
@@ -257,9 +254,21 @@ module MitsubachiInfra
       privileged('systemctl', 'daemon-reload')
     end
 
+    def install_nginx
+      nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
+      nginx.install(mode: @config.public? ? 'public_http_challenge' : 'lan')
+      return unless @config.public?
+
+      Certbot.new(config: @config, runner: @runner, nginx: nginx,
+                  health: HealthCheck.new(logger: @logger)).enable(staging: @config.fetch('https').fetch('staging'))
+    rescue Error => e
+      @logger.puts("warning: HTTPS enable failed; keeping HTTP configuration: #{e.message}")
+    end
+
     def configure_ufw
       privileged('ufw', 'allow', "#{@config.fetch('ports').fetch('http')}/tcp")
       privileged('ufw', 'allow', "#{@config.fetch('ports').fetch('https')}/tcp")
+      privileged('ufw', 'allow', '22/tcp')
       minecraft_ports.each { |port| privileged('ufw', 'allow', "#{port}/tcp") }
     end
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Mitsubachi Solid Queue Worker
+Description=Mitsubachi Worker
 After=network-online.target
 Wants=network-online.target
 
@@ -20,6 +20,7 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=60s
 KillSignal=SIGTERM
+SyslogIdentifier=mitsubachi-worker
 StandardOutput=journal
 StandardError=journal
 

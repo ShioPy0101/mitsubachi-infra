@@ -19,6 +19,20 @@ module MitsubachiInfra
                     user)
       end
       @runner.run('install', '-d', '-o', user, '-g', user, '-m', '0700', File.join(home, '.ssh'))
+      @runner.run('touch', File.join(home, '.ssh', 'authorized_keys'))
+      @runner.run('chown', "#{user}:#{user}", File.join(home, '.ssh', 'authorized_keys'))
+      @runner.run('chmod', '0600', File.join(home, '.ssh', 'authorized_keys'))
+      @runner.run('touch', File.join(home, '.ssh', 'known_hosts'))
+      @runner.run('chown', "#{user}:#{user}", File.join(home, '.ssh', 'known_hosts'))
+      @runner.run('chmod', '0644', File.join(home, '.ssh', 'known_hosts'))
+      known_hosts = File.join(home, '.ssh', 'known_hosts')
+      known = @runner.run('ssh-keygen', '-F', 'github.com', '-f', known_hosts, allow_failure: true).success?
+      unless known
+        result = @runner.run('ssh-keyscan', '-H', 'github.com', allow_failure: true)
+        File.open(known_hosts, 'a') { |file| file.write(result.stdout) } if result.success? && !@runner.dry_run
+        @runner.run('chown', "#{user}:#{user}", known_hosts)
+        @runner.run('chmod', '0644', known_hosts)
+      end
       @runner.run('install', '-d', '-o', user, '-g', user, '-m', '0755', @config.fetch('deploy').fetch('app_root'))
       @runner.run('install', '-d', '-o', user, '-g', user, '-m', '0755', @config.backend_root, @config.frontend_root,
                   @config.repositories_root)

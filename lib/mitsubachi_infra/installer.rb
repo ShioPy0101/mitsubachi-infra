@@ -4,16 +4,19 @@ require 'English'
 require 'erb'
 require 'fileutils'
 require_relative 'atomic_writer'
+require_relative 'certbot'
 require_relative 'deploy_user'
+require_relative 'health_check'
 require_relative 'nginx'
 require_relative 'postgresql'
+require_relative 'ruby_runtime'
 require_relative 'systemd'
 
 module MitsubachiInfra
   class Installer
     PACKAGES = %w[
       git curl ca-certificates build-essential postgresql postgresql-contrib
-      nginx ufw certbot ruby-full nodejs npm rsync jq shellcheck
+      nginx ufw certbot python3-certbot-nginx ruby-full nodejs npm rsync jq
     ].freeze
 
     def initialize(config:, runner:, repo_root:)
@@ -26,6 +29,7 @@ module MitsubachiInfra
       @runner.run('apt-get', 'update')
       @runner.run('apt-get', 'install', '-y', *PACKAGES)
       DeployUser.new(config: @config, runner: @runner).ensure!
+      RubyRuntime.new(config: @config, runner: @runner).ensure!
       install_cli
       install_directories
       install_templates
@@ -52,16 +56,30 @@ module MitsubachiInfra
     def install_templates
       nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
       nginx.install(mode: @config.public? ? 'public_http_challenge' : 'lan')
-      unit = ERB.new(File.read(File.join(@repo_root, 'templates', 'systemd', 'mitsubachi-api.service.erb')),
-                     trim_mode: '-').result(binding)
-      tmp = "/tmp/mitsubachi-api.service.#{$PROCESS_ID}"
-      File.write(tmp, unit)
-      @runner.run('install', '-o', 'root', '-g', 'root', '-m', '0644', tmp,
-                  '/etc/systemd/system/mitsubachi-api.service')
+      install_systemd_unit('mitsubachi-api.service', 'mitsubachi-api.service.erb')
+      install_systemd_unit('mitsubachi-worker.service', 'mitsubachi-jobs.service.erb')
       Systemd.new(runner: @runner).daemon_reload
       Systemd.new(runner: @runner).enable('mitsubachi-api.service')
+      Systemd.new(runner: @runner).enable('mitsubachi-worker.service')
+      enable_https_if_possible(nginx) if @config.public?
+    end
+
+    def install_systemd_unit(unit_name, template)
+      unit = ERB.new(File.read(File.join(@repo_root, 'templates', 'systemd', template)),
+                     trim_mode: '-').result(binding)
+      tmp = "/tmp/#{unit_name}.#{$PROCESS_ID}"
+      File.write(tmp, unit)
+      @runner.run('install', '-o', 'root', '-g', 'root', '-m', '0644', tmp,
+                  "/etc/systemd/system/#{unit_name}")
     ensure
       FileUtils.rm_f(tmp) if tmp
+    end
+
+    def enable_https_if_possible(nginx)
+      Certbot.new(config: @config, runner: @runner, nginx: nginx,
+                  health: HealthCheck.new(logger: $stderr)).enable(staging: @config.fetch('https').fetch('staging'))
+    rescue Error => e
+      warn "warning: HTTPS enable failed; keeping HTTP configuration: #{e.message}"
     end
   end
 end
