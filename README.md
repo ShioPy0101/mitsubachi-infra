@@ -1,6 +1,6 @@
 # mitsubachi-infra
 
-`mitsubachi-infra` は、Mitsubachi の本番 Ubuntu 上で Rails API、Solid Queue worker、React/Vite frontend、Caddy、systemd、UFW、release/rollback を管理する Infra リポジトリです。
+`mitsubachi-infra` は、Mitsubachi の本番 Ubuntu 上で Rails API、Solid Queue worker、React/Vite frontend、Nginx、Certbot、systemd、UFW、release/rollback を管理する Infra リポジトリです。
 
 現行の本番運用は、利用者が本番 Ubuntu へ SSH 接続した後、その本番 Ubuntu 上で Ruby CLI を実行する方式です。`mitsubachi-infra` が開発 Ubuntu から本番 Ubuntu へ SSH 接続する実装は採用しません。
 
@@ -22,7 +22,7 @@ Frontend: https://mitsubachi.shiosalt.com
 Rails API: https://mitsubachi-api.shiosalt.com
 ```
 
-Caddy が 80/443 を受け、frontend は `/var/www/mitsubachi-frontend/current/dist` から静的配信し、Rails API は `127.0.0.1:3000` の Puma へ reverse proxy します。Minecraft で使用する TCP `25565` / `25566` は UFW 設定で維持し、用途を変更しません。
+Nginx が 80/443 を受け、frontend は `/var/www/mitsubachi-frontend/current/dist` から静的配信し、Rails API は `127.0.0.1:3000` の Puma へ reverse proxy します。Minecraft で使用する TCP `25565` / `25566` は UFW 設定で維持し、用途を変更しません。
 
 詳細:
 
@@ -53,7 +53,7 @@ git@github.com:ShioPy0101/mitsubachi-front.git
 ```text
 mitsubachi-infra
   Ubuntu 初期構築
-  Caddy
+  Nginx / Certbot
   systemd
   UFW
   deploy / rollback
@@ -88,7 +88,7 @@ deploy_api.sh の既定 --repo-url
 
 `deploy_api.sh` は Rails API を `/var/www/mitsubachi/repo` へ mirror clone/fetch し、解決した commit SHA から `/var/www/mitsubachi/releases/<release>` を作ります。Infra リポジトリ内へ Rails コードを clone したり、submodule として追加したり、コピーしたりしません。
 
-Frontend は Ruby CLI の production deploy で `git@github.com:ShioPy0101/mitsubachi-front.git` から取得し、Caddy で静的配信します。
+Frontend は Ruby CLI の production deploy で `git@github.com:ShioPy0101/mitsubachi-front.git` から取得し、Nginx で静的配信します。
 
 ```text
 http://<ubuntu-private-ip>/
@@ -103,8 +103,8 @@ http://<ubuntu-private-ip>/api/*
 ```text
 LAN client
   -> http://<ubuntu-private-ip>
-  -> Caddy :80/:443
-  -> Rails / Puma 127.0.0.1:3001
+  -> Nginx :80/:443
+  -> Rails / Puma 127.0.0.1:3000
   -> PostgreSQL
 ```
 
@@ -118,7 +118,7 @@ browser
   -> /mnt/external-hdd/mitsubachi/files/drive_items/:storage_key
 ```
 
-Rails/Puma の `127.0.0.1:3001` と PostgreSQL の `5432` は LAN に公開しません。LAN client から見える入口は Nginx の `:80` だけです。
+Rails/Puma の `127.0.0.1:3000` と PostgreSQL の `5432` は LAN に公開しません。LAN client から見える入口は Nginx の `:80/:443` だけです。
 
 ## Ruby CLI
 
@@ -126,6 +126,7 @@ Rails/Puma の `127.0.0.1:3001` と PostgreSQL の `5432` は LAN に公開し�
 
 ```bash
 sudo mitsubachi-infra install --interactive
+sudo mitsubachi-infra install --dry-run
 sudo mitsubachi-infra deploy
 sudo mitsubachi-infra deploy backend --ref main
 sudo mitsubachi-infra deploy frontend --ref main
@@ -142,6 +143,46 @@ sudo mitsubachi-infra https status
 
 `--dry-run` は `install`、`deploy`、`rollback`、`https enable` などで利用できます。dry-run でも secret は表示しません。
 
+初回 install は root 権限で OS パッケージ、deploy ユーザー、rbenv/Ruby、Nginx、Certbot、systemd unit、UFW ルールを整えます。アプリケーションの Git clone、Bundler、Rails task、npm、frontend build は deploy ユーザーで実行します。秘密鍵はリポジトリへ入れず、`/home/deploy/.ssh` に手動配置してください。`known_hosts` は GitHub の SSH host key を非対話で確認できるよう install 時に準備します。
+
+Nginx は Ubuntu 標準の `/etc/nginx/sites-enabled/default` symlink と競合しないよう、Mitsubachi 設定を有効化する前にその symlink だけを削除します。`/etc/nginx/sites-available/default` の原本は削除しません。設定更新はバックアップ、`nginx -t`、reload、失敗時復元の順で行い、HTTPS 化に失敗した場合も HTTP challenge 設定を維持します。
+
+公開時の段階:
+
+```text
+1. HTTP only 設定を生成し、ACME challenge を公開する
+2. nginx -t に成功した場合だけ Nginx を reload する
+3. Certbot で frontend/API それぞれの証明書を取得または既存証明書を再利用する
+4. 証明書ファイル確認後に HTTPS 設定を生成する
+5. nginx -t に成功した場合だけ reload する
+```
+
+運用確認:
+
+```bash
+sudo nginx -t
+sudo systemctl status nginx
+sudo systemctl status mitsubachi-api
+sudo systemctl status mitsubachi-worker
+sudo journalctl -u mitsubachi-api -n 200 --no-pager
+sudo journalctl -u mitsubachi-worker -n 200 --no-pager
+sudo certbot certificates
+sudo ufw status verbose
+sudo -u deploy ssh -T git@github.com
+sudo -u deploy env HOME=/home/deploy RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/bin:/home/deploy/.rbenv/shims:/usr/local/bin:/usr/bin:/bin bash -lc 'cd /var/www/mitsubachi/current && bundle exec rails runner "puts :ok"'
+```
+
+環境変数は `/etc/mitsubachi/rails.env` と `/etc/mitsubachi/frontend.env` に分離します。`frontend.env` の `VITE_API_BASE_URL` は build 時に成果物へ埋め込まれるため、秘密情報を置いてはいけません。本番値は `https://mitsubachi-api.shiosalt.com` です。
+
+rollback:
+
+```bash
+sudo mitsubachi-infra rollback backend
+sudo mitsubachi-infra rollback frontend
+```
+
+backend rollback は DB migration を戻しません。破壊的 migration の前には database backup を取得してください。
+
 Shell に残している主な処理は `scripts/install_local.sh` の最小 bootstrap だけです。これは root 権限確認、`ruby-full` / `git` / `sudo` の導入、`bin/mitsubachi-infra install` の起動だけを担当します。既存の `deploy_api.sh` などは互換・移行用として残していますが、新しい通常運用は Ruby CLI 側へ移します。
 
 CLI の主な責務:
@@ -156,8 +197,11 @@ lib/mitsubachi_infra/configuration.rb
 lib/mitsubachi_infra/deployment/
   backend/frontend release deploy と rollback。
 
-lib/mitsubachi_infra/caddy.rb
-  Caddyfile の生成、validation、reload。
+lib/mitsubachi_infra/nginx.rb
+  Nginx 設定の生成、安全な適用、validation、reload、失敗時復元。
+
+lib/mitsubachi_infra/certbot.rb
+  HTTP-01 証明書取得、既存証明書再利用、renew 後の Nginx 検証。
 
 lib/mitsubachi_infra/production.rb
   本番 Ubuntu 上での bootstrap、backend/frontend deploy、rollback、production-check、mail-test。

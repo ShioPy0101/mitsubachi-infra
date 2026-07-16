@@ -13,11 +13,27 @@ $LOAD_PATH.unshift(File.join(ROOT, 'lib'))
 require 'mitsubachi_infra/command_runner'
 require 'mitsubachi_infra/configuration'
 require 'mitsubachi_infra/caddy'
+require 'mitsubachi_infra/nginx'
 require 'mitsubachi_infra/deployment/release_manager'
 require 'mitsubachi_infra/errors'
 require 'mitsubachi_infra/production'
 
 class MitsubachiInfraTest < Minitest::Test
+  class RecordingRunner
+    attr_reader :commands
+    attr_accessor :dry_run
+
+    def initialize(dry_run: false)
+      @dry_run = dry_run
+      @commands = []
+    end
+
+    def run(*command, **_options)
+      @commands << command.flatten.map(&:to_s)
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+  end
+
   def config_data(overrides = {})
     MitsubachiInfra::Configuration::DEFAULT.merge(overrides)
   end
@@ -87,6 +103,102 @@ class MitsubachiInfraTest < Minitest::Test
       assert result.success?
       assert_equal File.realpath(dir), File.realpath(result.stdout)
     end
+  end
+
+  def test_command_runner_failure_includes_stderr
+    runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: false)
+    error = assert_raises(MitsubachiInfra::CommandError) do
+      runner.run(RbConfig.ruby, '-e', 'warn "nginx: [emerg] duplicate default server"; exit 7')
+    end
+
+    assert_includes error.message, 'status=7'
+    assert_includes error.message, 'stderr=nginx: [emerg] duplicate default server'
+  end
+
+  def test_command_runner_allow_failure_returns_result
+    runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: false)
+    result = runner.run(RbConfig.ruby, '-e', 'warn "failed"; exit 3', allow_failure: true)
+
+    refute result.success?
+    assert_equal 3, result.status
+    assert_includes result.stderr, 'failed'
+  end
+
+  def test_command_runner_timeout_mentions_timeout
+    runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: false)
+    error = assert_raises(MitsubachiInfra::Error) do
+      runner.run(RbConfig.ruby, '-e', 'sleep 2', timeout: 0.1)
+    end
+
+    assert_includes error.message, 'timed out'
+  end
+
+  def test_command_runner_env_and_secret_masking
+    io = StringIO.new
+    runner = MitsubachiInfra::CommandRunner.new(logger: io, dry_run: false)
+    result = runner.run(RbConfig.ruby, '-e', 'print ENV.fetch("MITSUBACHI_TEST")',
+                        env: { 'MITSUBACHI_TEST' => :ok, 'SMTP_PASSWORD' => 'hidden' })
+
+    assert_equal 'ok', result.stdout
+    refute_includes io.string, 'hidden'
+  end
+
+  def test_command_runner_user_nil_does_not_use_sudo
+    io = StringIO.new
+    runner = MitsubachiInfra::CommandRunner.new(logger: io, dry_run: true)
+    runner.run('true', user: nil)
+
+    refute_includes io.string, 'sudo -u'
+  end
+
+  def test_command_runner_user_specified_uses_sudo
+    io = StringIO.new
+    runner = MitsubachiInfra::CommandRunner.new(logger: io, dry_run: true)
+    runner.run('true', user: 'deploy')
+
+    assert_includes io.string, 'sudo -u deploy'
+  end
+
+  def test_public_http_nginx_separates_frontend_and_api_without_ssl
+    config = production_config('/tmp/mitsubachi-test')
+    rendered = MitsubachiInfra::Nginx.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
+                                 .render(mode: 'public_http_challenge')
+
+    assert_equal 2, rendered.scan('default_server').length
+    refute_includes rendered, 'ssl_certificate'
+    assert_includes rendered, 'server_name mitsubachi.shiosalt.com;'
+    assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com;'
+    assert_includes rendered, '/.well-known/acme-challenge/'
+    assert_includes rendered, 'try_files $uri $uri/ /index.html;'
+    assert_includes rendered, 'proxy_set_header X-Forwarded-Host $host;'
+    assert_includes rendered, 'location /internal/storage/drive_items/'
+    assert_includes rendered, 'internal;'
+  end
+
+  def test_public_https_nginx_has_redirect_and_separate_ssl_servers
+    config = production_config('/tmp/mitsubachi-test')
+    rendered = MitsubachiInfra::Nginx.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
+                                 .render(mode: 'public_https')
+
+    assert_includes rendered, 'return 301 https://$host$request_uri;'
+    assert_includes rendered, 'server_name mitsubachi.shiosalt.com;'
+    assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com;'
+    assert_includes rendered, '/etc/letsencrypt/live/mitsubachi.shiosalt.com/fullchain.pem'
+    assert_includes rendered, '/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem'
+    assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
+  end
+
+  def test_nginx_install_removes_ubuntu_default_before_test
+    runner = RecordingRunner.new(dry_run: true)
+    config = production_config('/tmp/mitsubachi-test')
+    MitsubachiInfra::Nginx.new(config: config, runner: runner, repo_root: ROOT).install(mode: 'public_http_challenge')
+
+    commands = runner.commands.map { |command| command.join(' ') }
+    assert commands.any? { |command| command == 'rm -f /etc/nginx/sites-enabled/default' }
+    assert commands.index { |command| command.start_with?('rm -f /etc/nginx/sites-enabled/default') } <
+           commands.index { |command| command == 'nginx -t' }
+    assert commands.index { |command| command == 'nginx -t' } <
+           commands.index { |command| command == 'systemctl reload nginx' }
   end
 
   def test_release_manager_keeps_current_release
