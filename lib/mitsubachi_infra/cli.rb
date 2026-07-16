@@ -21,6 +21,7 @@ require_relative 'systemd'
 module MitsubachiInfra
   class CLI
     def initialize(argv, repo_root:)
+      @original_argv = argv.dup
       @argv = argv.dup
       @repo_root = repo_root
       @options = { dry_run: false, config: Configuration::CONFIG_PATH }
@@ -86,12 +87,14 @@ module MitsubachiInfra
         opts.on('--interactive') { local[:interactive] = true }
         opts.on('--remove-nginx-default-site') { local[:remove_nginx_default_site] = true }
       end.parse!(@argv)
+      result = nil
       locked do
-        Installer.new(config: @config, runner: @runner, repo_root: @repo_root).install(
+        result = Installer.new(config: @config, runner: @runner, repo_root: @repo_root).install(
           interactive: local[:interactive],
           remove_nginx_default_site: local[:remove_nginx_default_site]
         )
       end
+      exec_after_self_update(result) if result && result[:reexec]
     end
 
     def deploy
@@ -276,6 +279,13 @@ module MitsubachiInfra
       return yield if @runner.dry_run
 
       Lock.with(&block)
+    end
+
+    def exec_after_self_update(result)
+      executable = result.fetch(:executable)
+      warn "info: CLI self-update installed #{result[:release]}; re-executing #{executable}"
+      ENV[Installer::SELF_UPDATE_ENV] = '1'
+      exec(executable, *@original_argv)
     end
   end
 end

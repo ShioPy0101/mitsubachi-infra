@@ -21,6 +21,19 @@ module MitsubachiInfra
   class Installer
     CLI_ROOT = '/opt/mitsubachi-infra'
     CLI_LINK = '/usr/local/bin/mitsubachi-infra'
+    SELF_UPDATE_ENV = 'MITSUBACHI_INFRA_SELF_UPDATED'
+    REQUIRED_CLI_RELEASE_FILES = %w[
+      bin/mitsubachi-infra
+      exe/mitsubachi-infra
+      lib/mitsubachi_infra.rb
+      lib/mitsubachi_infra/cli.rb
+      templates/nginx/lan.conf.erb
+      templates/nginx/public_http_challenge.conf.erb
+      templates/nginx/public_https.conf.erb
+      templates/systemd/mitsubachi-api.service.erb
+      templates/systemd/mitsubachi-jobs.service.erb
+      env/config.yml.example
+    ].freeze
     PACKAGES = %w[
       git curl ca-certificates build-essential postgresql postgresql-contrib
       nginx ufw certbot python3-certbot-nginx ruby-full rsync jq
@@ -48,17 +61,22 @@ module MitsubachiInfra
       DeployUser.new(config: @config, runner: @runner).ensure!
       save_config_if_changed
       RubyRuntime.new(config: @config, runner: @runner).ensure!
-      install_cli
+      cli_result = install_cli
+      return cli_result if cli_result[:reexec]
+
       install_directories
       install_env_files
       install_templates
       verify_install
       print_completion_summary
+      { reexec: false }
     end
 
     private
 
     def install_cli
+      return { reexec: false, release: @repo_root } if self_update_already_applied?
+
       stamp = "#{$PROCESS_ID}-#{SecureRandom.hex(3)}"
       release = File.join(@cli_root, 'releases',
                           "#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}-#{stamp}")
@@ -76,19 +94,17 @@ module MitsubachiInfra
         @runner.run('install', '-d', '-o', 'root', '-g', 'root', '-m', '0755', File.dirname(@cli_root), @cli_root,
                     File.join(@cli_root, 'releases'))
         @runner.run('ln', '-sfn', File.join(@cli_root, 'current', 'bin', 'mitsubachi-infra'), @cli_link)
-        return
+        return { reexec: false }
       end
 
       FileUtils.rm_rf(tmp)
-      FileUtils.mkdir_p(File.join(tmp, 'bin'))
-      FileUtils.mkdir_p(File.join(tmp, 'lib'))
-      FileUtils.cp(File.join(@repo_root, 'bin', 'mitsubachi-infra'), File.join(tmp, 'bin', 'mitsubachi-infra'))
+      FileUtils.mkdir_p(tmp)
+      copy_cli_release(tmp)
       FileUtils.chmod(0o755, File.join(tmp, 'bin', 'mitsubachi-infra'))
-      FileUtils.cp_r(File.join(@repo_root, 'lib', 'mitsubachi_infra'), File.join(tmp, 'lib'))
-      FileUtils.cp_r(File.join(@repo_root, 'templates'), tmp)
       FileUtils.mkdir_p(File.join(@cli_root, 'releases'))
       FileUtils.mv(tmp, release)
       release_created = true
+      validate_cli_release!(release)
       @runner.run('chown', '-R', 'root:root', release) if Process.euid.zero?
       assert_replaceable_cli_link!(current_path, label: 'CLI current')
       assert_replaceable_cli_link!(@cli_link, label: 'CLI executable')
@@ -97,6 +113,7 @@ module MitsubachiInfra
       atomic_replace_symlink(link_tmp, @cli_link, File.join(@cli_root, 'current', 'bin', 'mitsubachi-infra'),
                              label: 'CLI executable')
       cli_link_switched = true
+      { reexec: should_reexec_after_cli_install?, executable: @cli_link, release: release }
     rescue StandardError
       FileUtils.rm_rf(tmp) if tmp
       unless cli_link_switched
@@ -106,6 +123,39 @@ module MitsubachiInfra
       FileUtils.rm_f(current_tmp) if current_tmp
       FileUtils.rm_f(link_tmp) if link_tmp
       raise
+    end
+
+    def copy_cli_release(tmp)
+      %w[bin exe lib templates].each do |name|
+        FileUtils.cp_r(File.join(@repo_root, name), tmp)
+      end
+      %w[env config].each do |name|
+        source = File.join(@repo_root, name)
+        FileUtils.cp_r(source, tmp) if File.directory?(source)
+      end
+    end
+
+    def validate_cli_release!(release)
+      missing = REQUIRED_CLI_RELEASE_FILES.reject { |path| File.file?(File.join(release, path)) }
+      return if missing.empty?
+
+      raise Error, "CLI release is missing required files: #{missing.join(', ')}"
+    end
+
+    def should_reexec_after_cli_install?
+      ENV[SELF_UPDATE_ENV].to_s.empty?
+    end
+
+    def self_update_already_applied?
+      ENV[SELF_UPDATE_ENV] == '1' && installed_release_root?(@repo_root)
+    end
+
+    def installed_release_root?(path)
+      real = File.realpath(path)
+      releases = File.join(File.realpath(@cli_root), 'releases')
+      real.start_with?("#{releases}/")
+    rescue Errno::ENOENT
+      false
     end
 
     def atomic_replace_symlink(temporary_link, path, target, label:)

@@ -385,6 +385,49 @@ class MitsubachiInfraTest < Minitest::Test
     patch_singleton(SecureRandom, :hex, ->(_original, _length = nil) { value }) { yield }
   end
 
+  def without_self_update_marker
+    previous = ENV.delete(MitsubachiInfra::Installer::SELF_UPDATE_ENV)
+    yield
+  ensure
+    ENV[MitsubachiInfra::Installer::SELF_UPDATE_ENV] = previous if previous
+  end
+
+  def with_self_update_marker
+    previous = ENV[MitsubachiInfra::Installer::SELF_UPDATE_ENV]
+    ENV[MitsubachiInfra::Installer::SELF_UPDATE_ENV] = '1'
+    yield
+  ensure
+    if previous.nil?
+      ENV.delete(MitsubachiInfra::Installer::SELF_UPDATE_ENV)
+    else
+      ENV[MitsubachiInfra::Installer::SELF_UPDATE_ENV] = previous
+    end
+  end
+
+  def create_cli_fixture_repo(path, omit: nil)
+    files = [
+      'bin/mitsubachi-infra',
+      'exe/mitsubachi-infra',
+      'lib/mitsubachi_infra.rb',
+      'lib/mitsubachi_infra/cli.rb',
+      'templates/nginx/lan.conf.erb',
+      'templates/nginx/public_http_challenge.conf.erb',
+      'templates/nginx/public_https.conf.erb',
+      'templates/systemd/mitsubachi-api.service.erb',
+      'templates/systemd/mitsubachi-jobs.service.erb',
+      'env/config.yml.example'
+    ]
+    files.each do |relative|
+      next if relative == omit
+
+      target = File.join(path, relative)
+      FileUtils.mkdir_p(File.dirname(target))
+      File.write(target, relative.end_with?('mitsubachi-infra') ? "#!/usr/bin/env ruby\n" : "#{relative}\n")
+    end
+    FileUtils.chmod(0o755, File.join(path, 'bin', 'mitsubachi-infra')) if File.exist?(File.join(path, 'bin', 'mitsubachi-infra'))
+    FileUtils.chmod(0o755, File.join(path, 'exe', 'mitsubachi-infra')) if File.exist?(File.join(path, 'exe', 'mitsubachi-infra'))
+  end
+
   def capture_health_request
     captured = nil
     response = Struct.new(:code).new('200')
@@ -1093,14 +1136,126 @@ class MitsubachiInfraTest < Minitest::Test
                                      repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
 
       release = Dir.glob(File.join(cli_root, 'releases', '*')).find { |path| File.directory?(path) }
+      assert_path_exists File.join(release, 'bin', 'mitsubachi-infra')
+      assert_path_exists File.join(release, 'exe', 'mitsubachi-infra')
+      assert_path_exists File.join(release, 'lib', 'mitsubachi_infra.rb')
+      assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'cli.rb')
       assert_path_exists File.join(release, 'templates', 'nginx', 'public_http_challenge.conf.erb')
       assert_path_exists File.join(release, 'templates', 'nginx', 'public_https.conf.erb')
       assert_path_exists File.join(release, 'templates', 'systemd', 'mitsubachi-api.service.erb')
+      assert_path_exists File.join(release, 'env', 'config.yml.example')
 
       rendered = MitsubachiInfra::Nginx.new(config: production_config(dir), runner: RecordingRunner.new,
                                             repo_root: release).render(mode: 'public_http_challenge')
       assert_includes rendered, 'server_name mitsubachi.shiosalt.com'
       assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com'
+    end
+  end
+
+  def test_cli_install_validates_release_before_switching_current
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      old = File.join(cli_root, 'releases', 'old')
+      bad_repo = File.join(dir, 'bad-repo')
+      FileUtils.mkdir_p(File.join(old, 'bin'))
+      File.write(File.join(old, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      FileUtils.ln_sf(old, File.join(cli_root, 'current'))
+      FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
+      create_cli_fixture_repo(bad_repo, omit: 'templates/nginx/public_http_challenge.conf.erb')
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                       repo_root: bad_repo, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+      end
+
+      assert_includes error.message, 'CLI release is missing required files'
+      assert_includes error.message, 'templates/nginx/public_http_challenge.conf.erb'
+      assert_equal old, File.realpath(File.join(cli_root, 'current'))
+      assert_equal File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), File.readlink(cli_link)
+      assert_equal [old], Dir.glob(File.join(cli_root, 'releases', '*')).select { |path| File.directory?(path) }
+    end
+  end
+
+  def test_install_returns_reexec_after_cli_self_update
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+        'deployment_mode' => 'lan',
+        'server_ip' => '192.168.10.151',
+        'paths' => {
+          'rails_root' => File.join(dir, 'rails'),
+          'frontend_root' => File.join(dir, 'frontend'),
+          'rails_env' => File.join(dir, 'etc', 'rails.env'),
+          'frontend_env' => File.join(dir, 'etc', 'frontend.env'),
+          'server_id' => File.join(dir, 'etc', 'server-id')
+        }
+      ))
+
+      result = without_self_update_marker do
+        MitsubachiInfra::Installer.new(config: config, runner: NodeRunner.new(node_stdout: 'v22.0.0'), repo_root: ROOT,
+                                       cli_root: cli_root, cli_link: cli_link).install
+      end
+
+      assert_equal true, result[:reexec]
+      assert_equal cli_link, result[:executable]
+      assert File.symlink?(File.join(cli_root, 'current'))
+      assert_equal File.realpath(File.join(cli_root, 'current')), result[:release]
+    end
+  end
+
+  def test_install_after_self_update_uses_installed_release_without_second_cli_switch
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                     repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+      release = File.realpath(File.join(cli_root, 'current'))
+      config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+        'deployment_mode' => 'lan',
+        'server_ip' => '192.168.10.151',
+        'paths' => {
+          'rails_root' => File.join(dir, 'rails'),
+          'frontend_root' => File.join(dir, 'frontend'),
+          'rails_env' => File.join(dir, 'etc', 'rails.env'),
+          'frontend_env' => File.join(dir, 'etc', 'frontend.env'),
+          'server_id' => File.join(dir, 'etc', 'server-id')
+        }
+      ))
+      runner = NodeRunner.new(node_stdout: 'v22.0.0')
+
+      result = with_self_update_marker do
+        MitsubachiInfra::Installer.new(config: config, runner: runner, repo_root: release,
+                                       cli_root: cli_root, cli_link: cli_link, health: FakeHealth.new).install
+      end
+
+      assert_equal false, result[:reexec]
+      assert_equal release, File.realpath(File.join(cli_root, 'current'))
+      assert_includes runner.commands, ['nginx', '-t']
+    end
+  end
+
+  def test_cli_reexecs_current_entrypoint_after_self_update
+    cli = MitsubachiInfra::CLI.new(%w[--config /etc/mitsubachi/config.yml install --interactive], repo_root: ROOT)
+    captured = nil
+    cli.define_singleton_method(:exec) do |*args|
+      captured = args
+      throw :exec_called
+    end
+
+    without_self_update_marker do
+      catch(:exec_called) do
+        cli.send(:exec_after_self_update, executable: '/usr/local/bin/mitsubachi-infra',
+                                         release: '/opt/mitsubachi-infra/releases/new')
+      end
+
+      assert_equal ['/usr/local/bin/mitsubachi-infra', '--config', '/etc/mitsubachi/config.yml', 'install',
+                    '--interactive'], captured
+      assert_equal '1', ENV[MitsubachiInfra::Installer::SELF_UPDATE_ENV]
     end
   end
 
