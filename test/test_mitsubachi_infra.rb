@@ -413,9 +413,12 @@ class MitsubachiInfraTest < Minitest::Test
       'templates/nginx/lan.conf.erb',
       'templates/nginx/public_http_challenge.conf.erb',
       'templates/nginx/public_https.conf.erb',
+      'templates/env/frontend.env.erb',
       'templates/systemd/mitsubachi-api.service.erb',
       'templates/systemd/mitsubachi-jobs.service.erb',
-      'env/config.yml.example'
+      'templates/caddy/Caddyfile.erb',
+      'env/config.yml.example',
+      'config/local.env.example'
     ]
     files.each do |relative|
       next if relative == omit
@@ -868,6 +871,30 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_cli_install_replaces_existing_broken_release_without_templates
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      broken = File.join(cli_root, 'releases', 'broken-without-templates')
+      FileUtils.mkdir_p(File.join(broken, 'bin'))
+      FileUtils.mkdir_p(File.join(broken, 'lib', 'mitsubachi_infra'))
+      File.write(File.join(broken, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      File.write(File.join(broken, 'lib', 'mitsubachi_infra', 'cli.rb'), "# frozen_string_literal: true\n")
+      FileUtils.chmod(0o755, File.join(broken, 'bin', 'mitsubachi-infra'))
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      FileUtils.ln_sf(broken, File.join(cli_root, 'current'))
+      FileUtils.ln_sf(File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), cli_link)
+
+      MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                     repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+
+      refute_equal broken, File.realpath(File.join(cli_root, 'current'))
+      assert_path_exists File.join(File.realpath(File.join(cli_root, 'current')), 'templates', 'nginx',
+                                   'public_http_challenge.conf.erb')
+      assert_equal File.join(cli_root, 'current', 'bin', 'mitsubachi-infra'), File.readlink(cli_link)
+    end
+  end
+
   def test_cli_install_succeeds_when_existing_link_points_to_same_target
     Dir.mktmpdir do |dir|
       cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
@@ -1140,10 +1167,15 @@ class MitsubachiInfraTest < Minitest::Test
       assert_path_exists File.join(release, 'exe', 'mitsubachi-infra')
       assert_path_exists File.join(release, 'lib', 'mitsubachi_infra.rb')
       assert_path_exists File.join(release, 'lib', 'mitsubachi_infra', 'cli.rb')
-      assert_path_exists File.join(release, 'templates', 'nginx', 'public_http_challenge.conf.erb')
-      assert_path_exists File.join(release, 'templates', 'nginx', 'public_https.conf.erb')
-      assert_path_exists File.join(release, 'templates', 'systemd', 'mitsubachi-api.service.erb')
       assert_path_exists File.join(release, 'env', 'config.yml.example')
+      assert_path_exists File.join(release, 'config', 'local.env.example')
+      expected_templates = Dir.glob(File.join(ROOT, 'templates', '**', '*')).select { |path| File.file?(path) }
+                              .map { |path| path.delete_prefix("#{ROOT}/") }.sort
+      actual_templates = Dir.glob(File.join(release, 'templates', '**', '*')).select { |path| File.file?(path) }
+                            .map { |path| path.delete_prefix("#{release}/") }.sort
+      assert_equal expected_templates, actual_templates
+      assert system(RbConfig.ruby, File.join(release, 'bin', 'mitsubachi-infra'), '--help',
+                    out: File::NULL, err: File::NULL)
 
       rendered = MitsubachiInfra::Nginx.new(config: production_config(dir), runner: RecordingRunner.new,
                                             repo_root: release).render(mode: 'public_http_challenge')

@@ -3,6 +3,7 @@
 require 'English'
 require 'erb'
 require 'fileutils'
+require 'rbconfig'
 require 'securerandom'
 require 'time'
 require 'yaml'
@@ -30,9 +31,12 @@ module MitsubachiInfra
       templates/nginx/lan.conf.erb
       templates/nginx/public_http_challenge.conf.erb
       templates/nginx/public_https.conf.erb
+      templates/env/frontend.env.erb
       templates/systemd/mitsubachi-api.service.erb
       templates/systemd/mitsubachi-jobs.service.erb
+      templates/caddy/Caddyfile.erb
       env/config.yml.example
+      config/local.env.example
     ].freeze
     PACKAGES = %w[
       git curl ca-certificates build-essential postgresql postgresql-contrib
@@ -101,10 +105,9 @@ module MitsubachiInfra
       FileUtils.mkdir_p(tmp)
       copy_cli_release(tmp)
       FileUtils.chmod(0o755, File.join(tmp, 'bin', 'mitsubachi-infra'))
-      FileUtils.mkdir_p(File.join(@cli_root, 'releases'))
+      validate_cli_release!(tmp)
       FileUtils.mv(tmp, release)
       release_created = true
-      validate_cli_release!(release)
       @runner.run('chown', '-R', 'root:root', release) if Process.euid.zero?
       assert_replaceable_cli_link!(current_path, label: 'CLI current')
       assert_replaceable_cli_link!(@cli_link, label: 'CLI executable')
@@ -137,9 +140,17 @@ module MitsubachiInfra
 
     def validate_cli_release!(release)
       missing = REQUIRED_CLI_RELEASE_FILES.reject { |path| File.file?(File.join(release, path)) }
-      return if missing.empty?
+      raise Error, "CLI release is missing required files: #{missing.join(', ')}" unless missing.empty?
 
-      raise Error, "CLI release is missing required files: #{missing.join(', ')}"
+      template_files = Dir.glob(File.join(release, 'templates', '**', '*')).select { |path| File.file?(path) }
+      raise Error, 'CLI release is missing templates files' if template_files.empty?
+
+      find = system('find', File.join(release, 'templates'), '-type', 'f', out: File::NULL, err: File::NULL)
+      raise Error, 'CLI release templates failed find validation' unless find
+
+      help = system(RbConfig.ruby, File.join(release, 'bin', 'mitsubachi-infra'), '--help',
+                    out: File::NULL, err: File::NULL)
+      raise Error, 'CLI release executable failed --help validation' unless help
     end
 
     def should_reexec_after_cli_install?
