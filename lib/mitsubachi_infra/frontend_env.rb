@@ -34,6 +34,25 @@ module MitsubachiInfra
       { VITE_API_BASE_URL => vite_api_base_url }
     end
 
+    def verify_build_output!(release:, output_directory:, dry_run: false)
+      dist = File.join(release, output_directory)
+      index = File.join(dist, 'index.html')
+      @logger.puts("[CHECK] #{index}")
+      return true if dry_run
+
+      raise Error, "frontend build output missing index.html: #{index}" unless File.exist?(index)
+
+      files = Dir.glob(File.join(dist, '**', '*')).select { |path| File.file?(path) }
+      stale = files.find { |path| frontend_asset?(path) && File.read(path).include?("#{VITE_API_BASE_URL} is not configured") }
+      raise Error, "frontend build still contains #{VITE_API_BASE_URL} missing fallback: #{stale}" if stale
+
+      assets = files.select { |path| frontend_asset?(path) }
+      embedded = assets.any? { |path| File.read(path).include?(vite_api_base_url) }
+      raise Error, "#{VITE_API_BASE_URL} was not embedded in frontend build" unless embedded
+
+      true
+    end
+
     def vite_api_base_url
       env.fetch(VITE_API_BASE_URL, '').to_s.strip
     end
@@ -68,6 +87,12 @@ module MitsubachiInfra
       env.to_h do |key, value|
         [key, key.match?(SECRET_KEY_PATTERN) ? '<redacted>' : value]
       end
+    end
+
+    private
+
+    def frontend_asset?(path)
+      %w[.html .js .mjs .css].include?(File.extname(path))
     end
   end
 end

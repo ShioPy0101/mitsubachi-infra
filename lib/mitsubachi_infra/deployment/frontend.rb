@@ -33,7 +33,8 @@ module MitsubachiInfra
           env.log_summary(build_dir: release)
           @runner.deploy(*app.fetch('build_command'), config: @config, chdir: release, timeout: 1800,
                                                     env: env.build_env)
-          verify_build_output(release)
+          env.verify_build_output!(release: release, output_directory: app.fetch('output_directory'),
+                                   dry_run: @runner.dry_run)
 
           @logger.puts("[SWITCH] frontend current -> #{release}")
           manager.activate(release) unless @runner.dry_run
@@ -62,11 +63,6 @@ module MitsubachiInfra
         @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
       end
 
-      def verify_build_output(release)
-        index = File.join(release, @config.fetch('frontend').fetch('output_directory'), 'index.html')
-        @logger.puts("[CHECK] #{index}")
-        raise Error, "frontend build output missing index.html: #{index}" unless @runner.dry_run || File.exist?(index)
-      end
     end
   end
 end

@@ -678,6 +678,57 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_frontend_env_verifies_api_url_embedded_in_build
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      release = File.join(dir, 'release')
+      FileUtils.mkdir_p(File.join(release, 'dist', 'assets'))
+      File.write(File.join(release, 'dist', 'index.html'), '<script src="/assets/index.js"></script>')
+      File.write(File.join(release, 'dist', 'assets', 'index.js'),
+                 'const api="https://mitsubachi-api.shiosalt.com";')
+
+      assert MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new)
+                                        .verify_build_output!(release: release, output_directory: 'dist')
+    end
+  end
+
+  def test_frontend_env_rejects_build_with_missing_api_fallback
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      release = File.join(dir, 'release')
+      FileUtils.mkdir_p(File.join(release, 'dist', 'assets'))
+      File.write(File.join(release, 'dist', 'index.html'), '<script src="/assets/index.js"></script>')
+      File.write(File.join(release, 'dist', 'assets', 'index.js'), 'throw new Error("VITE_API_BASE_URL is not configured");')
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new)
+                                    .verify_build_output!(release: release, output_directory: 'dist')
+      end
+
+      assert_includes error.message, 'frontend build still contains VITE_API_BASE_URL missing fallback'
+    end
+  end
+
+  def test_frontend_env_rejects_build_without_embedded_api_url
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
+      release = File.join(dir, 'release')
+      FileUtils.mkdir_p(File.join(release, 'dist', 'assets'))
+      File.write(File.join(release, 'dist', 'index.html'), '<script src="/assets/index.js"></script>')
+      File.write(File.join(release, 'dist', 'assets', 'index.js'), 'const api="";')
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::FrontendEnv.new(config: config, logger: StringIO.new)
+                                    .verify_build_output!(release: release, output_directory: 'dist')
+      end
+
+      assert_includes error.message, 'VITE_API_BASE_URL was not embedded in frontend build'
+    end
+  end
+
   def test_config_show_reports_frontend_env_and_masks_secret_like_values
     Dir.mktmpdir do |dir|
       config = production_config(dir)
