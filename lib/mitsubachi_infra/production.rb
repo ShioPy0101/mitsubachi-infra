@@ -305,10 +305,9 @@ module MitsubachiInfra
       privileged('nginx', '-t')
       privileged('systemctl', 'is-active', '--quiet', API_SERVICE)
       privileged('systemctl', 'is-active', '--quiet', JOBS_SERVICE)
-      health_path = "#{@config.fetch('backend').fetch('health_path')}/ready"
-      privileged('curl', '-fsS', '-H', "Host: #{@config.health_host}",
-                 "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{health_path}")
-      privileged('curl', '-fsS', '-H', "Host: #{@config.health_host}", "http://127.0.0.1#{health_path}")
+      HealthCheck.new(logger: @logger).check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
+      nginx_health_url = "http://127.0.0.1#{@config.fetch('backend').fetch('health_path')}/ready"
+      privileged('curl', '-fsS', '-H', "Host: #{@config.health_host}", nginx_health_url)
       privileged('ss', '-ltn')
       @runner.deploy('ruby', '-e',
                      "abort RUBY_VERSION unless RUBY_VERSION == #{@config.fetch('runtime').fetch('ruby_version').inspect}",
@@ -359,6 +358,10 @@ module MitsubachiInfra
 
     def frontend_health_url
       @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
+    end
+
+    def backend_health_url
+      "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/ready"
     end
 
     def frontend_doctor_lines

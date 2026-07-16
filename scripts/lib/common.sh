@@ -190,13 +190,24 @@ health_check_retry() {
   local url="$1"
   local attempts="${2:-30}"
   local delay="${3:-2}"
-  local i code
+  local host="${4:-}"
+  local i code curl_args
   require_command curl
+  if [[ "${url}" =~ ^http://(127\.0\.0\.1|localhost)(:|/) && -z "${host}" ]]; then
+    die "health check Host header is required for local Rails URL: ${url}"
+  fi
+  curl_args=(-fsS -o /dev/null -w '%{http_code}' --max-time 10)
+  if [[ -n "${host}" ]]; then
+    curl_args+=(-H "Host: ${host}")
+  fi
   for ((i = 1; i <= attempts; i++)); do
-    code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 "${url}" || true)"
+    code="$(curl "${curl_args[@]}" "${url}" || true)"
     if [[ "${code}" == "200" ]]; then
       log "health check 成功: ${url}"
       return 0
+    fi
+    if [[ "${code}" == "403" ]]; then
+      die "Rails returned HTTP 403. Check the health-check Host header and Rails ALLOWED_HOSTS/config.hosts. url=${url} host=${host:-'(none)'}"
     fi
     log "health check 待機中 (${i}/${attempts}): ${url} の応答=${code:-curl-error}"
     sleep "${delay}"

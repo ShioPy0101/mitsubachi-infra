@@ -102,11 +102,7 @@ module MitsubachiInfra
       end
 
       def backend_health_url
-        if @config.public?
-          "https://#{@config.api_host}#{@config.fetch('backend').fetch('health_path')}/ready"
-        else
-          "http://#{@config.fetch('server_ip')}#{@config.fetch('backend').fetch('health_path')}/ready"
-        end
+        "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/ready"
       end
     end
   end

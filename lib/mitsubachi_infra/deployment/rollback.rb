@@ -57,7 +57,7 @@ module MitsubachiInfra
       end
 
       def backend_health_url
-        @config.public? ? "https://#{@config.api_host}/api/health/ready" : "http://#{@config.fetch('server_ip')}/api/health/ready"
+        "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/ready"
       end
 
       def frontend_health_url

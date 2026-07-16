@@ -12,6 +12,7 @@ Usage: scripts/rollback_api.sh [release-name] [options]
 Options:
   --list                  List available releases and exit.
   --health-url URL        Ready health URL. Default: http://127.0.0.1:3000/api/health/ready.
+  --health-host HOST      Host header for Rails health check.
   --skip-restart          Only switch current symlink; do not restart or health check.
   --help                  Show this help.
 USAGE
@@ -20,12 +21,14 @@ USAGE
 TARGET=""
 LIST=false
 HEALTH_URL="http://127.0.0.1:3000/api/health/ready"
+HEALTH_HOST="${HEALTH_HOST:-}"
 SKIP_RESTART=false
 
 while (($#)); do
   case "$1" in
     --list) LIST=true; shift ;;
     --health-url) HEALTH_URL="${2:-}"; shift 2 ;;
+    --health-host) HEALTH_HOST="${2:-}"; shift 2 ;;
     --skip-restart) SKIP_RESTART=true; shift ;;
     --help) usage; exit 0 ;;
     --*) die "unknown argument: $1" ;;
@@ -81,7 +84,7 @@ atomic_symlink_switch "${target_real}" "${CURRENT_LINK}"
 if [[ "${SKIP_RESTART}" != true ]]; then
   log "rollback 後に systemd service を再起動し、health check を実行します。"
   sudo -n systemctl restart "${SERVICE_NAME}.service" || die "failed to restart ${SERVICE_NAME}; current points to $(readlink -f -- "${CURRENT_LINK}")"
-  health_check_retry "${HEALTH_URL}" 30 2
+  health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}"
 else
   log "--skip-restart 指定のため service restart と health check は実行しません。"
 fi

@@ -15,6 +15,7 @@ Options:
   --ref REF               Git ref to deploy. Default: main.
   --keep-releases N       Number of releases to keep. Default: 5.
   --health-url URL        Ready health URL. Default: http://127.0.0.1:3000/api/health/ready.
+  --health-host HOST      Host header for Rails health check.
   --skip-migrate          Do not run rails db:migrate.
   --skip-restart          Do not restart systemd service or run post-restart health check.
   --help                  Show this help.
@@ -25,6 +26,7 @@ RAILS_REPO_URL="git@github.com:ShioPy0101/mitsubachi-ruby.git"
 REF="main"
 KEEP_RELEASES=5
 HEALTH_URL="http://127.0.0.1:3000/api/health/ready"
+HEALTH_HOST="${HEALTH_HOST:-}"
 SKIP_MIGRATE=false
 SKIP_RESTART=false
 
@@ -34,6 +36,7 @@ while (($#)); do
     --ref) REF="${2:-}"; shift 2 ;;
     --keep-releases) KEEP_RELEASES="${2:-}"; shift 2 ;;
     --health-url) HEALTH_URL="${2:-}"; shift 2 ;;
+    --health-host) HEALTH_HOST="${2:-}"; shift 2 ;;
     --skip-migrate) SKIP_MIGRATE=true; shift ;;
     --skip-restart) SKIP_RESTART=true; shift ;;
     --help) usage; exit 0 ;;
@@ -167,12 +170,12 @@ if [[ "${SKIP_RESTART}" != true ]]; then
   systemctl --user status >/dev/null 2>&1 || true
   if command -v systemctl >/dev/null 2>&1; then
     sudo -n systemctl restart "${SERVICE_NAME}.service" || die "failed to restart ${SERVICE_NAME}; configure passwordless sudo for deploy or restart manually with --skip-restart"
-    if ! health_check_retry "${HEALTH_URL}" 30 2; then
+    if ! health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}"; then
       if [[ -n "${previous_release}" && -d "${previous_release}" ]]; then
         log "health check 失敗のため、current symlink を直前 release へ戻します: ${previous_release}"
         atomic_symlink_switch "${previous_release}" "${CURRENT_LINK}"
         sudo -n systemctl restart "${SERVICE_NAME}.service" || true
-        health_check_retry "${HEALTH_URL}" 30 2
+        health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}"
       fi
       die "deployment health check failed"
     fi

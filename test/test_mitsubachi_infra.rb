@@ -406,6 +406,30 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def capture_health_sequence(responses)
+    captured = []
+    attempts = 0
+    Net::HTTP.singleton_class.alias_method(:mitsubachi_original_start, :start)
+    Net::HTTP.define_singleton_method(:start) do |_host, _port, **_options, &block|
+      current = responses[[attempts, responses.length - 1].min]
+      attempts += 1
+      raise current if current.is_a?(Exception)
+
+      fake_http = Object.new
+      fake_http.define_singleton_method(:request) do |request|
+        captured << request
+        Struct.new(:code).new(current.to_s)
+      end
+      block.call(fake_http)
+    end
+    yield captured
+  ensure
+    if Net::HTTP.singleton_class.method_defined?(:mitsubachi_original_start)
+      Net::HTTP.singleton_class.alias_method(:start, :mitsubachi_original_start)
+      Net::HTTP.singleton_class.remove_method(:mitsubachi_original_start)
+    end
+  end
+
   def with_euid(value)
     Process.singleton_class.alias_method(:mitsubachi_original_euid, :euid)
     Process.define_singleton_method(:euid) { value }
@@ -1154,6 +1178,7 @@ class MitsubachiInfraTest < Minitest::Test
       installer.send(:verify_install)
 
       assert_equal 1, health.calls.length
+      assert_equal 'http://127.0.0.1:3000/api/health/ready', health.calls.first.first
       assert_equal 'mitsubachi-api.shiosalt.com', health.calls.first.last[:host]
       assert_equal 30, health.calls.first.last.fetch(:attempts, 30)
     end
@@ -1221,6 +1246,7 @@ class MitsubachiInfraTest < Minitest::Test
       MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
                                      health: health).send(:verify_install)
 
+      assert_equal 'http://127.0.0.1:3000/api/health/ready', health.calls.first.first
       assert_equal 'mitsubachi-api.shiosalt.com', health.calls.first.last[:host]
     end
   end
@@ -1242,6 +1268,7 @@ class MitsubachiInfraTest < Minitest::Test
       MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
                                      health: health).send(:verify_install)
 
+      assert_equal 'http://127.0.0.1:3000/api/health/ready', health.calls.first.first
       assert_equal '192.168.10.151', health.calls.first.last[:host]
     end
   end
@@ -1545,6 +1572,88 @@ class MitsubachiInfraTest < Minitest::Test
     end
 
     assert_equal '192.168.1.50', request['Host']
+  end
+
+  def test_health_check_requires_host_for_local_internal_url
+    error = assert_raises(MitsubachiInfra::Error) do
+      MitsubachiInfra::HealthCheck.new(logger: StringIO.new)
+                                  .check!('http://127.0.0.1:3000/api/health/ready', attempts: 1, delay: 0)
+    end
+
+    assert_includes error.message, 'health check Host header is required'
+  end
+
+  def test_health_check_host_header_200_succeeds
+    capture_health_sequence([200]) do |requests|
+      assert MitsubachiInfra::HealthCheck.new(logger: StringIO.new)
+                                        .check!('http://127.0.0.1:3000/api/health/ready',
+                                                host: 'mitsubachi-api.shiosalt.com', attempts: 1, delay: 0)
+      assert_equal 'mitsubachi-api.shiosalt.com', requests.first['Host']
+    end
+  end
+
+  def test_health_check_403_fails_without_retrying
+    io = StringIO.new
+    capture_health_sequence([403, 200]) do |requests|
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::HealthCheck.new(logger: io)
+                                    .check!('http://127.0.0.1:3000/api/health/ready',
+                                            host: 'mitsubachi-api.shiosalt.com', attempts: 30, delay: 0)
+      end
+
+      assert_equal 1, requests.length
+      assert_includes error.message, 'Rails returned HTTP 403'
+      assert_includes error.message, 'ALLOWED_HOSTS/config.hosts'
+    end
+  end
+
+  def test_health_check_connection_refused_retries
+    capture_health_sequence([Errno::ECONNREFUSED.new, 200]) do |requests|
+      assert MitsubachiInfra::HealthCheck.new(logger: StringIO.new)
+                                        .check!('http://127.0.0.1:3000/api/health/ready',
+                                                host: 'mitsubachi-api.shiosalt.com', attempts: 2, delay: 0)
+      assert_equal 1, requests.length
+    end
+  end
+
+  def test_backend_deploy_health_check_uses_internal_url_and_api_host
+    config = production_config('/tmp/mitsubachi-test')
+    backend = MitsubachiInfra::Deployment::Backend.new(config: config, runner: RecordingRunner.new,
+                                                       systemd: MitsubachiInfra::Systemd.new(runner: RecordingRunner.new),
+                                                       health: FakeHealth.new)
+
+    assert_equal 'http://127.0.0.1:3000/api/health/ready', backend.send(:backend_health_url)
+    assert_equal 'mitsubachi-api.shiosalt.com', config.health_host
+  end
+
+  def test_rollback_backend_health_check_uses_internal_url
+    config = production_config('/tmp/mitsubachi-test')
+    rollback = MitsubachiInfra::Deployment::Rollback.new(config: config, runner: RecordingRunner.new,
+                                                         systemd: MitsubachiInfra::Systemd.new(runner: RecordingRunner.new),
+                                                         health: FakeHealth.new)
+
+    assert_equal 'http://127.0.0.1:3000/api/health/ready', rollback.send(:backend_health_url)
+  end
+
+  def test_production_backend_health_check_uses_internal_url
+    config = production_config('/tmp/mitsubachi-test')
+    production = MitsubachiInfra::Production.new(config: config, repo_root: ROOT, runner: RecordingRunner.new,
+                                                logger: StringIO.new)
+
+    assert_equal 'http://127.0.0.1:3000/api/health/ready', production.send(:backend_health_url)
+  end
+
+  def test_lan_health_host_uses_server_ip_with_internal_url
+    config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+      'deployment_mode' => 'lan',
+      'server_ip' => '192.168.10.151'
+    ))
+    backend = MitsubachiInfra::Deployment::Backend.new(config: config, runner: RecordingRunner.new,
+                                                       systemd: MitsubachiInfra::Systemd.new(runner: RecordingRunner.new),
+                                                       health: FakeHealth.new)
+
+    assert_equal 'http://127.0.0.1:3000/api/health/ready', backend.send(:backend_health_url)
+    assert_equal '192.168.10.151', config.health_host
   end
 
   def test_generated_files_do_not_reference_3001
