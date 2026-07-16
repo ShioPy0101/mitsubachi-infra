@@ -17,6 +17,7 @@ require_relative 'errors'
 require_relative 'health_check'
 require_relative 'nginx'
 require_relative 'node_runtime'
+require_relative 'rails_command'
 require_relative 'ruby_runtime'
 require_relative 'systemd'
 
@@ -121,10 +122,8 @@ module MitsubachiInfra
         ActionMailer::Base.mail(to: #{to.inspect}, from: ENV.fetch("MAIL_FROM"), subject: "Mitsubachi production mail test", body: "Mitsubachi production mail test.").deliver_now
         puts "mail-test delivered"
       RUBY
-      @runner.deploy('bundle', 'exec', 'rails', 'runner', script,
-                     config: deploy_config,
-                     chdir: File.join(@config.fetch('paths').fetch('rails_root'), 'current'),
-                     timeout: 300)
+      rails_command.runner(script, release: File.join(@config.fetch('paths').fetch('rails_root'), 'current'),
+                                   timeout: 300)
     end
 
     private
@@ -196,10 +195,16 @@ module MitsubachiInfra
       @runner.deploy('bundle', 'config', 'set', '--local', 'without', 'development test', config: deploy_config,
                                                                                           chdir: release)
       @runner.deploy('bundle', 'install', config: deploy_config, chdir: release, timeout: 1800)
-      @runner.deploy('bundle', 'exec', 'rails', 'db:migrate', config: deploy_config, chdir: release, timeout: 1800)
+      rails_command.runner("ActiveRecord::Base.connection.execute('SELECT 1')", release: release, timeout: 300)
+      rails_command.runner('Rails.application.eager_load!', release: release, timeout: 300)
+      rails_command.rails('db:migrate', release: release, timeout: 1800)
       @runner.deploy('test', '-f', 'bin/jobs', config: deploy_config, chdir: release)
-      @runner.deploy('bundle', 'exec', 'rails', 'runner',
-                     "abort 'queue adapter is not solid_queue' unless Rails.application.config.active_job.queue_adapter.to_s == 'solid_queue'", config: deploy_config, chdir: release)
+      rails_command.rails('zeitwerk:check', release: release, timeout: 300)
+      rails_command.runner(
+        "abort 'queue adapter is not solid_queue' unless Rails.application.config.active_job.queue_adapter.to_s == 'solid_queue'",
+        release: release,
+        timeout: 300
+      )
     end
 
     def install_bundler(release)
@@ -334,6 +339,10 @@ module MitsubachiInfra
         key, value = line.split('=', 2)
         env[key] = value.to_s if key&.match?(/\A[A-Z0-9_]+\z/)
       end
+    end
+
+    def rails_command
+      @rails_command ||= RailsCommand.new(config: deploy_config, runner: @runner)
     end
 
     def rollback_root(root, restart:)

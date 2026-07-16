@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require_relative '../rails_command'
 require_relative 'release_manager'
 
 module MitsubachiInfra
@@ -33,7 +34,7 @@ module MitsubachiInfra
           install_bundle(release)
           link_shared(release, manager.shared_dir)
           rails_check(release)
-          @runner.deploy('bundle', 'exec', 'rails', 'db:migrate', config: @config, chdir: release, timeout: 1800)
+          rails_command.rails('db:migrate', release: release, timeout: 1800)
           manager.activate(release) unless @runner.dry_run
           @systemd.restart(SERVICE)
           @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
@@ -86,15 +87,18 @@ module MitsubachiInfra
 
       def rails_check(release)
         required = %w[DATABASE_URL DATABASE_CACHE_URL DATABASE_QUEUE_URL DATABASE_CABLE_URL]
-        env = '/etc/mitsubachi/rails.env'
+        env = @config.fetch('paths').fetch('rails_env')
         text = File.exist?(env) ? File.read(env) : ''
         missing = required.reject { |key| text.match?(/^#{Regexp.escape(key)}=.+/) }
         raise Error, "missing Rails database env keys: #{missing.join(', ')}" unless missing.empty? || @runner.dry_run
 
-        @runner.deploy('bundle', 'exec', 'rails', 'runner', "ActiveRecord::Base.connection.execute('SELECT 1')",
-                       config: @config, chdir: release, timeout: 300)
-        @runner.deploy('bundle', 'exec', 'rails', 'runner', 'Rails.application.eager_load!', config: @config,
-                                                                                             chdir: release, timeout: 300)
+        rails_command.runner("ActiveRecord::Base.connection.execute('SELECT 1')", release: release, timeout: 300)
+        rails_command.rails('zeitwerk:check', release: release, timeout: 300)
+        rails_command.runner('Rails.application.eager_load!', release: release, timeout: 300)
+      end
+
+      def rails_command
+        @rails_command ||= RailsCommand.new(config: @config, runner: @runner)
       end
 
       def backend_health_url

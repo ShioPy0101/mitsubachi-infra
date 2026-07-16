@@ -21,6 +21,7 @@ require 'mitsubachi_infra/node_runtime'
 require 'mitsubachi_infra/deployment/release_manager'
 require 'mitsubachi_infra/errors'
 require 'mitsubachi_infra/production'
+require 'mitsubachi_infra/rails_command'
 require 'mitsubachi_infra/systemd'
 
 class MitsubachiInfraTest < Minitest::Test
@@ -74,6 +75,20 @@ class MitsubachiInfraTest < Minitest::Test
       end
       return MitsubachiInfra::CommandRunner::Result.new(stdout: '10.0.0', stderr: '', status: 0) if argv == %w[npm --version]
 
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+  end
+
+  class OptionRecordingRunner < RecordingRunner
+    attr_reader :calls
+
+    def initialize
+      super
+      @calls = []
+    end
+
+    def deploy(*command, **options)
+      @calls << [command.flatten.map(&:to_s), options]
       MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
     end
   end
@@ -515,6 +530,75 @@ class MitsubachiInfraTest < Minitest::Test
                                      health: health).send(:verify_install)
 
       assert_equal '192.168.10.151', health.calls.first.last[:host]
+    end
+  end
+
+  def test_rails_command_uses_production_env_and_release_cwd
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      FileUtils.mkdir_p(File.dirname(config.fetch('paths').fetch('rails_env')))
+      File.write(config.fetch('paths').fetch('rails_env'), <<~ENV)
+        DATABASE_URL=postgresql://app:secret@127.0.0.1/db
+        RESEND_API_KEY=hidden
+      ENV
+      runner = OptionRecordingRunner.new
+      release = File.join(dir, 'release')
+
+      MitsubachiInfra::RailsCommand.new(config: config, runner: runner).runner('puts ENV.fetch("RAILS_ENV")',
+                                                                               release: release)
+
+      command, options = runner.calls.first
+      assert_equal %w[bundle exec rails runner], command[0, 4]
+      assert_equal release, options[:chdir]
+      assert_equal 'production', options[:env].fetch('RAILS_ENV')
+      assert_equal 'production', options[:env].fetch('RACK_ENV')
+      assert_equal 'development:test', options[:env].fetch('BUNDLE_WITHOUT')
+      assert_equal 'postgresql://app:secret@127.0.0.1/db', options[:env].fetch('DATABASE_URL')
+    end
+  end
+
+  def test_backend_deploy_rails_checks_use_common_production_env
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      FileUtils.mkdir_p(File.dirname(config.fetch('paths').fetch('rails_env')))
+      File.write(config.fetch('paths').fetch('rails_env'), <<~ENV)
+        DATABASE_URL=postgresql://app:secret@127.0.0.1/db
+        DATABASE_CACHE_URL=postgresql://app:secret@127.0.0.1/cache
+        DATABASE_QUEUE_URL=postgresql://app:secret@127.0.0.1/queue
+        DATABASE_CABLE_URL=postgresql://app:secret@127.0.0.1/cable
+      ENV
+      runner = OptionRecordingRunner.new
+      backend = MitsubachiInfra::Deployment::Backend.new(config: config, runner: runner,
+                                                         systemd: MitsubachiInfra::Systemd.new(runner: runner),
+                                                         health: FakeHealth.new)
+
+      backend.send(:rails_check, File.join(dir, 'release'))
+
+      rails_calls = runner.calls.select { |command, _options| command[0, 3] == %w[bundle exec rails] }
+      refute_empty rails_calls
+      rails_calls.each do |_command, options|
+        assert_equal 'production', options.fetch(:env).fetch('RAILS_ENV')
+        assert_equal 'production', options.fetch(:env).fetch('RACK_ENV')
+        assert_equal 'development:test', options.fetch(:env).fetch('BUNDLE_WITHOUT')
+      end
+    end
+  end
+
+  def test_rails_command_dry_run_masks_secret_env_values
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      FileUtils.mkdir_p(File.dirname(config.fetch('paths').fetch('rails_env')))
+      File.write(config.fetch('paths').fetch('rails_env'), "DATABASE_URL=postgresql://app:secret@127.0.0.1/db\n")
+      io = StringIO.new
+      runner = MitsubachiInfra::CommandRunner.new(logger: io, dry_run: true)
+
+      MitsubachiInfra::RailsCommand.new(config: config, runner: runner).rails('db:migrate',
+                                                                              release: File.join(dir, 'release'))
+
+      refute_includes io.string, 'secret'
+      assert_includes io.string, '<redacted>'
+      assert_includes io.string, 'RAILS_ENV=production'
+      assert_includes io.string, 'BUNDLE_WITHOUT=development:test'
     end
   end
 
