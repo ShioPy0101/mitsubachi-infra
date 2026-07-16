@@ -27,6 +27,7 @@ module MitsubachiInfra
         RAILS_MASTER_KEY=
         SECRET_KEY_BASE=
 
+        WEB_CONCURRENCY=0
         RESEND_API_KEY=
         MAIL_FROM=
         PORT=#{config.fetch('ports').fetch('rails')}

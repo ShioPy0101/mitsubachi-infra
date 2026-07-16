@@ -16,6 +16,7 @@ require_relative 'env_templates'
 require_relative 'errors'
 require_relative 'health_check'
 require_relative 'nginx'
+require_relative 'node_runtime'
 require_relative 'ruby_runtime'
 require_relative 'systemd'
 
@@ -36,6 +37,7 @@ module MitsubachiInfra
       check_server_id(allow_create: true)
       install_packages
       ensure_deploy_user
+      NodeRuntime.new(config: @config, runner: @runner).ensure!
       RubyRuntime.new(config: deploy_config, runner: @runner).ensure!
       install_directories
       install_env_files
@@ -216,7 +218,7 @@ module MitsubachiInfra
     def install_packages
       privileged('apt-get', 'update', timeout: 1800)
       privileged('apt-get', 'install', '-y', 'git', 'curl', 'ca-certificates', 'build-essential', 'ruby-full',
-                 'postgresql-client', 'nginx', 'ufw', 'certbot', 'python3-certbot-nginx', 'rsync', 'nodejs', 'npm',
+                 'postgresql-client', 'nginx', 'ufw', 'certbot', 'python3-certbot-nginx', 'rsync',
                  timeout: 1800)
     end
 
