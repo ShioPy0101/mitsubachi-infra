@@ -8,15 +8,19 @@
 ruby exe/mitsubachi-infra <command>
 ```
 
-## bootstrap
+## install / bootstrap
 
-目的: Caddy、systemd、UFW、deploy ユーザー、directory、env 雛形を冪等に整備します。
+目的: Nginx、Certbot、systemd、UFW、deploy ユーザー、directory、env 雛形を冪等に整備します。
 
 ```bash
+ruby exe/mitsubachi-infra --config /etc/mitsubachi/config.yml install --interactive
+ruby exe/mitsubachi-infra --config /etc/mitsubachi/config.yml install --interactive --remove-nginx-default-site
 ruby exe/mitsubachi-infra --config /etc/mitsubachi/config.yml bootstrap
 ```
 
 root 権限が必要な操作は `sudo -n` または root 実行で行います。Git clone、bundle、npm は deploy ユーザーで実行します。
+
+`--remove-nginx-default-site` は `/etc/nginx/sites-enabled/default` が symlink の場合にその symlink だけを外します。`sites-available/default` の原本や他の Nginx 設定は変更しません。Mitsubachi の Nginx 設定は通常 `default_server` を付けません。
 
 ## deploy / redeploy
 
@@ -50,7 +54,7 @@ ruby exe/mitsubachi-infra rollback-frontend
 
 ## production-check / doctor
 
-production-check は本番 service、Caddy、TLS endpoint、Minecraft port 設定を確認します。doctor はローカル command availability も併せて確認します。
+production-check は本番 service、Nginx、TLS endpoint、Minecraft port 設定を確認します。doctor はローカル command availability も併せて確認します。
 
 ```bash
 ruby exe/mitsubachi-infra production-check

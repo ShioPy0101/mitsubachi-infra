@@ -34,8 +34,85 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  class NginxFilesystemRunner
+    attr_reader :commands
+    attr_accessor :dry_run
+
+    def initialize(nginx_statuses: [0], dry_run: false)
+      @nginx_statuses = nginx_statuses.dup
+      @dry_run = dry_run
+      @commands = []
+    end
+
+    def run(*command, allow_failure: false, **_options)
+      argv = command.flatten.map(&:to_s)
+      @commands << argv
+      return nginx_result(allow_failure: allow_failure) if argv == %w[nginx -t]
+
+      apply_filesystem_command(argv) unless dry_run
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+
+    def mask(text)
+      text.to_s
+    end
+
+    private
+
+    def nginx_result(allow_failure:)
+      status = @nginx_statuses.length > 1 ? @nginx_statuses.shift : @nginx_statuses.first
+      result = MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: nginx_stderr(status), status: status)
+      raise MitsubachiInfra::CommandError.new(command: %w[nginx -t], status: status, stdout: '', stderr: result.stderr) if status != 0 && !allow_failure
+
+      result
+    end
+
+    def nginx_stderr(status)
+      return '' if status.zero?
+
+      'nginx: [emerg] duplicate default server'
+    end
+
+    def apply_filesystem_command(argv)
+      if argv[0, 7] == ['install', '-o', 'root', '-g', 'root', '-m', '0644']
+        FileUtils.mkdir_p(File.dirname(argv[8]))
+        FileUtils.cp(argv[7], argv[8])
+      elsif argv[0, 2] == ['cp', '-a']
+        FileUtils.cp(argv[2], argv[3])
+      elsif argv[0, 2] == ['rm', '-f']
+        FileUtils.rm_f(argv[2])
+      elsif argv[0, 2] == ['ln', '-sfn']
+        FileUtils.mkdir_p(File.dirname(argv[3]))
+        FileUtils.rm_f(argv[3])
+        FileUtils.ln_sf(argv[2], argv[3])
+      end
+    end
+  end
+
   def config_data(overrides = {})
     MitsubachiInfra::Configuration::DEFAULT.merge(overrides)
+  end
+
+  def nginx_paths(root)
+    {
+      nginx_conf: File.join(root, 'nginx.conf'),
+      conf_d: File.join(root, 'conf.d'),
+      sites_enabled: File.join(root, 'sites-enabled'),
+      target: File.join(root, 'sites-available', 'mitsubachi.conf'),
+      enabled: File.join(root, 'sites-enabled', 'mitsubachi.conf'),
+      ubuntu_default: File.join(root, 'sites-enabled', 'default')
+    }
+  end
+
+  def build_nginx(config, runner, paths, logger: StringIO.new)
+    MitsubachiInfra::Nginx.new(config: config, runner: runner, repo_root: ROOT, logger: logger, **paths)
+  end
+
+  def prepare_nginx_tree(root)
+    paths = nginx_paths(root)
+    FileUtils.mkdir_p([paths[:conf_d], paths[:sites_enabled], File.dirname(paths[:target])])
+    File.write(paths[:nginx_conf], "events {}\nhttp { include #{paths[:conf_d]}/*; include #{paths[:sites_enabled]}/*; }\n")
+    paths
   end
 
   def test_invalid_deployment_mode
@@ -164,7 +241,7 @@ class MitsubachiInfraTest < Minitest::Test
     rendered = MitsubachiInfra::Nginx.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
                                  .render(mode: 'public_http_challenge')
 
-    assert_equal 2, rendered.scan('default_server').length
+    assert_equal 0, rendered.scan('default_server').length
     refute_includes rendered, 'ssl_certificate'
     assert_includes rendered, 'server_name mitsubachi.shiosalt.com;'
     assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com;'
@@ -188,17 +265,146 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
   end
 
-  def test_nginx_install_removes_ubuntu_default_before_test
-    runner = RecordingRunner.new(dry_run: true)
-    config = production_config('/tmp/mitsubachi-test')
-    MitsubachiInfra::Nginx.new(config: config, runner: runner, repo_root: ROOT).install(mode: 'public_http_challenge')
+  def test_nginx_can_render_explicit_default_server
+    config = MitsubachiInfra::Configuration.new('/missing', data: config_data('nginx' => {
+                                                                                 'default_server' => true,
+                                                                                 'remove_default_site' => false
+                                                                               }))
+    rendered = MitsubachiInfra::Nginx.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
+                                 .render(mode: 'public_http_challenge')
 
-    commands = runner.commands.map { |command| command.join(' ') }
-    assert commands.any? { |command| command == 'rm -f /etc/nginx/sites-enabled/default' }
-    assert commands.index { |command| command.start_with?('rm -f /etc/nginx/sites-enabled/default') } <
-           commands.index { |command| command == 'nginx -t' }
-    assert commands.index { |command| command == 'nginx -t' } <
-           commands.index { |command| command == 'systemctl reload nginx' }
+    assert_equal 2, rendered.scan('default_server').length
+  end
+
+  def test_nginx_install_removes_ubuntu_default_before_test
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      default_available = File.join(dir, 'sites-available', 'default')
+      FileUtils.mkdir_p(File.dirname(default_available))
+      File.write(default_available, "server { listen 80 default_server; }\n")
+      FileUtils.ln_sf(default_available, paths[:ubuntu_default])
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 0])
+      build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge',
+                                                                 remove_default_site: true)
+
+      commands = runner.commands.map { |command| command.join(' ') }
+      assert commands.any? { |command| command == "rm -f #{paths[:ubuntu_default]}" }
+      assert commands.index { |command| command.start_with?("rm -f #{paths[:ubuntu_default]}") } <
+             commands.rindex { |command| command == 'nginx -t' }
+      assert commands.rindex { |command| command == 'nginx -t' } <
+             commands.index { |command| command == 'systemctl reload nginx' }
+      refute_path_exists paths[:ubuntu_default]
+    end
+  end
+
+  def test_nginx_install_succeeds_with_existing_default_site_when_not_default
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      default_available = File.join(dir, 'sites-available', 'default')
+      FileUtils.mkdir_p(File.dirname(default_available))
+      File.write(default_available, "server { listen 80 default_server; }\n")
+      FileUtils.ln_sf(default_available, paths[:ubuntu_default])
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 0])
+
+      build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge')
+
+      assert_path_exists paths[:ubuntu_default]
+      assert_path_exists paths[:target]
+      assert runner.commands.none? { |command| command == ['rm', '-f', paths[:ubuntu_default]] }
+    end
+  end
+
+  def test_nginx_detects_default_server_in_other_file_when_candidate_is_default
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      File.write(File.join(paths[:conf_d], 'other.conf'), "server { listen 80 default_server; }\n")
+      config = MitsubachiInfra::Configuration.new('/missing', data: config_data('nginx' => {
+                                                                                 'default_server' => true,
+                                                                                 'remove_default_site' => false
+                                                                               }))
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        build_nginx(config, NginxFilesystemRunner.new(nginx_statuses: [0]), paths).install(mode: 'public_http_challenge')
+      end
+
+      assert_includes error.message, 'default_server would be duplicated'
+      assert_includes error.message, 'other.conf'
+    end
+  end
+
+  def test_nginx_install_skips_missing_default_site
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 0])
+
+      build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge',
+                                                                 remove_default_site: true)
+
+      assert runner.commands.none? { |command| command == ['rm', '-f', paths[:ubuntu_default]] }
+    end
+  end
+
+  def test_nginx_rolls_back_when_nginx_test_fails
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      File.write(paths[:target], "old config\n")
+      FileUtils.ln_sf(paths[:target], paths[:enabled])
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 1, 0])
+
+      assert_raises(MitsubachiInfra::CommandError) do
+        build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge')
+      end
+
+      assert_equal "old config\n", File.read(paths[:target])
+      assert_equal paths[:target], File.readlink(paths[:enabled])
+      assert_equal 3, runner.commands.count { |command| command == %w[nginx -t] }
+      assert runner.commands.none? { |command| command == ['systemctl', 'reload', 'nginx'] }
+    end
+  end
+
+  def test_nginx_reports_original_and_rollback_errors
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      File.write(paths[:target], "old config\n")
+      FileUtils.ln_sf(paths[:target], paths[:enabled])
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 1, 1])
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge')
+      end
+
+      assert_includes error.message, 'nginx rollback failed'
+      assert_includes error.message, 'original_error='
+      assert_includes error.message, "restored #{paths[:target]}"
+      assert_includes error.message, 'rollback_stderr=nginx: [emerg] duplicate default server'
+    end
+  end
+
+  def test_nginx_refuses_to_start_when_initial_config_is_broken
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      runner = NginxFilesystemRunner.new(nginx_statuses: [1])
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge')
+      end
+
+      assert_includes error.message, 'existing Nginx configuration is broken'
+      refute_path_exists paths[:target]
+    end
+  end
+
+  def test_nginx_dry_run_does_not_change_files
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      File.write(paths[:target], "old config\n")
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 0], dry_run: true)
+
+      build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge',
+                                                                 remove_default_site: true)
+
+      assert_equal "old config\n", File.read(paths[:target])
+    end
   end
 
   def test_release_manager_keeps_current_release

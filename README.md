@@ -127,6 +127,7 @@ Rails/Puma の `127.0.0.1:3000` と PostgreSQL の `5432` は LAN に公開し�
 ```bash
 sudo mitsubachi-infra install --interactive
 sudo mitsubachi-infra install --dry-run
+sudo mitsubachi-infra install --interactive --remove-nginx-default-site
 sudo mitsubachi-infra deploy
 sudo mitsubachi-infra deploy backend --ref main
 sudo mitsubachi-infra deploy frontend --ref main
@@ -145,7 +146,13 @@ sudo mitsubachi-infra https status
 
 初回 install は root 権限で OS パッケージ、deploy ユーザー、rbenv/Ruby、Nginx、Certbot、systemd unit、UFW ルールを整えます。アプリケーションの Git clone、Bundler、Rails task、npm、frontend build は deploy ユーザーで実行します。秘密鍵はリポジトリへ入れず、`/home/deploy/.ssh` に手動配置してください。`known_hosts` は GitHub の SSH host key を非対話で確認できるよう install 時に準備します。
 
-Nginx は Ubuntu 標準の `/etc/nginx/sites-enabled/default` symlink と競合しないよう、Mitsubachi 設定を有効化する前にその symlink だけを削除します。`/etc/nginx/sites-available/default` の原本は削除しません。設定更新はバックアップ、`nginx -t`、reload、失敗時復元の順で行い、HTTPS 化に失敗した場合も HTTP challenge 設定を維持します。
+Nginx の `default_server` は IPv4 `:80` と IPv6 `[::]:80` それぞれで 1 つだけ設定できます。Mitsubachi の Nginx テンプレートは通常 `default_server` を付けません。既存 Nginx を使っている環境では、他サービスの default server を維持したまま frontend/API の `server_name` だけを追加します。
+
+Ubuntu 標準の `/etc/nginx/sites-enabled/default` を Mitsubachi 用に無効化したい場合だけ、`--remove-nginx-default-site` または `nginx.remove_default_site: true` を使います。この処理は `/etc/nginx/sites-enabled/default` が symlink の場合にその symlink だけを外します。`/etc/nginx/sites-available/default` の原本や他サービスの Nginx 設定は削除しません。対象が存在しない場合は成功扱いです。
+
+install は変更前に `/etc/nginx/nginx.conf`、`/etc/nginx/conf.d/*`、`/etc/nginx/sites-enabled/*` を調べ、`default_server` の所在、既存 `mitsubachi.conf`、`sites-enabled/default`、初期 `nginx -t` の状態をログへ出します。初期状態で `nginx -t` が失敗している場合は、Mitsubachi の変更を開始せず「既存 Nginx 設定が壊れている」として停止します。
+
+設定更新はバックアップ、`nginx -t`、reload、失敗時復元の順で行い、HTTPS 化に失敗した場合も HTTP challenge 設定を維持します。rollback 後にも `nginx -t` を実行し、rollback が失敗した場合は元のエラーと復元操作の内容を両方表示します。
 
 公開時の段階:
 
@@ -170,6 +177,26 @@ sudo certbot certificates
 sudo ufw status verbose
 sudo -u deploy ssh -T git@github.com
 sudo -u deploy env HOME=/home/deploy RBENV_ROOT=/home/deploy/.rbenv PATH=/home/deploy/.rbenv/bin:/home/deploy/.rbenv/shims:/usr/local/bin:/usr/bin:/bin bash -lc 'cd /var/www/mitsubachi/current && bundle exec rails runner "puts :ok"'
+```
+
+Nginx 手動復旧:
+
+```bash
+sudo nginx -t
+sudo ls -l /etc/nginx/sites-enabled
+sudo grep -R \"listen .*default_server\" /etc/nginx/nginx.conf /etc/nginx/conf.d /etc/nginx/sites-enabled
+sudo cp -a /etc/nginx/sites-available/mitsubachi.conf.backup.YYYYmmddTHHMMSSZ /etc/nginx/sites-available/mitsubachi.conf
+sudo ln -sfn /etc/nginx/sites-available/mitsubachi.conf /etc/nginx/sites-enabled/mitsubachi.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+`/etc/nginx/sites-enabled/default` を戻す必要がある場合は、原本が残っていることを確認して symlink だけを再作成します。
+
+```bash
+sudo ln -sfn /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
 環境変数は `/etc/mitsubachi/rails.env` と `/etc/mitsubachi/frontend.env` に分離します。`frontend.env` の `VITE_API_BASE_URL` は build 時に成果物へ埋め込まれるため、秘密情報を置いてはいけません。本番値は `https://mitsubachi-api.shiosalt.com` です。
