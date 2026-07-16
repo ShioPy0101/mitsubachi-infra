@@ -14,6 +14,7 @@ require_relative 'health_check'
 require_relative 'installer'
 require_relative 'lock'
 require_relative 'nginx'
+require_relative 'postgresql_wal_archive'
 require_relative 'production'
 require_relative 'status'
 require_relative 'systemd'
@@ -63,6 +64,7 @@ module MitsubachiInfra
       when 'status' then status
       when 'config' then config
       when 'https' then https
+      when 'postgres' then postgres
       else raise ValidationError, "unknown command: #{command}"
       end
       0
@@ -204,6 +206,30 @@ module MitsubachiInfra
       end
     end
 
+    def postgres
+      sub = @argv.shift
+      raise ValidationError, 'postgres command must be wal-archive' unless sub == 'wal-archive'
+
+      action = @argv.shift || 'status'
+      opts = { verify: false, json: false }
+      OptionParser.new do |parser|
+        parser.on('--verify') { opts[:verify] = true }
+        parser.on('--json') { opts[:json] = true }
+        parser.on('--dry-run') do
+          @options[:dry_run] = true
+          @runner.dry_run = true
+        end
+      end.parse!(@argv)
+      @config.validate!
+      wal = PostgreSQLWalArchive.new(config: @config, runner: @runner, logger: $stderr)
+      case action
+      when 'configure' then locked { wal.configure(verify: opts[:verify]) }
+      when 'verify' then locked { wal.verify }
+      when 'status' then wal.status(json: opts[:json])
+      else raise ValidationError, 'postgres wal-archive command must be configure, verify, or status'
+      end
+    end
+
     def usage
       <<~USAGE
         Usage:
@@ -227,6 +253,9 @@ module MitsubachiInfra
           mitsubachi-infra https enable [--staging] [--dry-run]
           mitsubachi-infra https renew [--dry-run]
           mitsubachi-infra https status [--json]
+          mitsubachi-infra postgres wal-archive configure [--verify] [--dry-run]
+          mitsubachi-infra postgres wal-archive verify [--dry-run]
+          mitsubachi-infra postgres wal-archive status [--json]
       USAGE
     end
 
@@ -270,6 +299,7 @@ module MitsubachiInfra
 
     def root_required?(command, argv)
       return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test].include?(command)
+      return true if command == 'postgres' && argv.first == 'wal-archive'
       return false unless command == 'https'
 
       %w[enable renew].include?(argv.first || 'status')

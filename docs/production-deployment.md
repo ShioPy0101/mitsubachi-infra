@@ -58,6 +58,27 @@ Frontend の公開 root は `/var/www/mitsubachi-frontend/current/dist` です�
 * `/etc/mitsubachi/rails.env` の秘密値を設定する
 * Resend の送信元、SPF、DKIM、DMARC を確認する
 * Minecraft 25565/25566 が既存どおり到達することを確認する
+* 外付け HDD が `/mnt/external-hdd` に mount されていることを確認し、必要なら WAL アーカイブを有効化する
+
+## PostgreSQL WAL Archive
+
+WAL アーカイブは通常 deploy とは別に有効化します。`pg_wal` を直接コピーせず、PostgreSQL の `archive_command` が `/usr/local/libexec/mitsubachi/archive-wal %p %f` を呼び出して外付け HDD へ保存します。
+
+```bash
+sudo mitsubachi-infra postgres wal-archive configure
+sudo mitsubachi-infra postgres wal-archive configure --verify
+sudo mitsubachi-infra postgres wal-archive status
+```
+
+保存先:
+
+```text
+/mnt/external-hdd/mitsubachi/backups/wal
+```
+
+`archive-wal` は実行ごとに `/mnt/external-hdd` が mount point であることを確認します。外付け HDD が外れた場合は非0で失敗し、PostgreSQL は WAL を `pg_wal` に保持して再試行します。失敗が続くと `pg_wal` が肥大化するため、`postgres wal-archive status` と `pg_stat_archiver` を監視してください。
+
+WAL アーカイブだけでは復旧できません。PITR にはベースバックアップが必要です。WAL を `find -mtime -delete` のように日数だけで削除する運用は禁止し、保存期限管理は pgBackRest / Barman などで扱います。
 
 ## HTTPS
 

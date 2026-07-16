@@ -56,3 +56,13 @@ https:
   challenge: http-01
   acme_webroot: /var/lib/mitsubachi/acme
   enable_hsts: false
+
+postgresql:
+  wal_archive:
+    mount_point: /mnt/external-hdd
+    archive_directory: /mnt/external-hdd/mitsubachi/backups/wal
+    archive_script: /usr/local/libexec/mitsubachi/archive-wal
+    config_filename: 90-mitsubachi-wal-archive.conf
+    version:
+    cluster:
+    archive_timeout:

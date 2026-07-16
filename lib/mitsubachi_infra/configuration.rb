@@ -67,6 +67,17 @@ module MitsubachiInfra
         'acme_webroot' => '/var/lib/mitsubachi/acme',
         'enable_hsts' => false,
         'challenge' => 'http-01'
+      },
+      'postgresql' => {
+        'wal_archive' => {
+          'mount_point' => '/mnt/external-hdd',
+          'archive_directory' => '/mnt/external-hdd/mitsubachi/backups/wal',
+          'archive_script' => '/usr/local/libexec/mitsubachi/archive-wal',
+          'config_filename' => '90-mitsubachi-wal-archive.conf',
+          'version' => nil,
+          'cluster' => nil,
+          'archive_timeout' => nil
+        }
       }
     }.freeze
 
@@ -157,6 +168,7 @@ module MitsubachiInfra
       validate_app!('frontend')
       validate_frontend!
       validate_https!
+      validate_postgresql!
       true
     end
 
@@ -248,6 +260,30 @@ module MitsubachiInfra
 
       raise ValidationError,
             'https.email is required in public mode'
+    end
+
+    def validate_postgresql!
+      wal = data.fetch('postgresql').fetch('wal_archive')
+      %w[mount_point archive_directory archive_script config_filename].each do |key|
+        present!(wal[key], "postgresql.wal_archive.#{key}")
+      end
+      %w[mount_point archive_directory archive_script].each do |key|
+        value = wal.fetch(key).to_s
+        raise ValidationError, "postgresql.wal_archive.#{key} must be absolute" unless value.start_with?('/')
+
+        reject_traversal!(value, "postgresql.wal_archive.#{key}")
+      end
+      archive_dir = wal.fetch('archive_directory').to_s
+      mount_point = wal.fetch('mount_point').to_s
+      unless archive_dir == mount_point || archive_dir.start_with?("#{mount_point}/")
+        raise ValidationError, 'postgresql.wal_archive.archive_directory must be under mount_point'
+      end
+      filename = wal.fetch('config_filename').to_s
+      raise ValidationError, 'postgresql.wal_archive.config_filename must end with .conf' unless filename.end_with?('.conf')
+      raise ValidationError, 'postgresql.wal_archive.config_filename must be a basename' if filename.include?('/')
+      if wal['archive_timeout'] && !wal['archive_timeout'].to_s.match?(/\A\d+[smh]?\z/)
+        raise ValidationError, 'postgresql.wal_archive.archive_timeout must be a PostgreSQL duration like 300s'
+      end
     end
 
     def validate_production_schema!

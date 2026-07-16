@@ -1050,6 +1050,98 @@ pg_restore --dbname=mitsubachi_restore_check /mnt/external-hdd/mitsubachi/backup
 
 production DB へ restore する場合は、対象 DB を誤って上書きしないよう接続先を必ず確認してください。この README の例では検証用 DB へ restore しています。
 
+### PostgreSQL WAL Archive
+
+WAL アーカイブは `pg_wal` をバックアップ先として扱わず、PostgreSQL の `archive_command` で外付け HDD へ保存します。保存先は標準で次です。
+
+```text
+/mnt/external-hdd/mitsubachi/backups/wal
+```
+
+設定:
+
+```bash
+sudo mitsubachi-infra postgres wal-archive configure
+```
+
+強制 WAL 切り替えまで含めた検証:
+
+```bash
+sudo mitsubachi-infra postgres wal-archive configure --verify
+sudo mitsubachi-infra postgres wal-archive verify
+```
+
+状態確認:
+
+```bash
+sudo mitsubachi-infra postgres wal-archive status
+sudo mitsubachi-infra postgres wal-archive status --json
+```
+
+設定値は `/etc/mitsubachi/config.yml` の `postgresql.wal_archive` で管理します。PostgreSQL の version / cluster は通常自動検出します。稼働中クラスタが複数ある場合は勝手に選ばず停止するため、必要に応じて `version` と `cluster` を明示してください。
+
+```yaml
+postgresql:
+  wal_archive:
+    mount_point: /mnt/external-hdd
+    archive_directory: /mnt/external-hdd/mitsubachi/backups/wal
+    archive_script: /usr/local/libexec/mitsubachi/archive-wal
+    config_filename: 90-mitsubachi-wal-archive.conf
+    version:
+    cluster:
+    archive_timeout:
+```
+
+実装は `/mnt/external-hdd` が実際の mount point であることを `findmnt --mountpoint` で確認してから進みます。外付け HDD が外れた状態で root filesystem 配下へ誤保存しないよう、`archive-wal` スクリプトも実行ごとに `mountpoint -q /mnt/external-hdd` を確認します。
+
+現在の PostgreSQL 設定確認:
+
+```bash
+cd /tmp
+sudo -u postgres psql -Atc "SHOW data_directory;"
+sudo -u postgres psql -Atc "SHOW archive_mode;"
+sudo -u postgres psql -Atc "SHOW archive_command;"
+sudo -u postgres psql -Atc "SHOW archive_library;"
+```
+
+`postgres` ユーザーが入れない作業ディレクトリから実行すると `could not change directory` 警告が出るため、`cd /tmp` してから確認します。
+
+アーカイブ状況:
+
+```bash
+sudo -u postgres psql -c "
+SELECT
+  archived_count,
+  failed_count,
+  last_archived_wal,
+  last_archived_time,
+  last_failed_wal,
+  last_failed_time
+FROM pg_stat_archiver;
+"
+```
+
+手動テスト:
+
+```bash
+sudo -u postgres psql -c "SELECT pg_switch_wal();"
+sudo find /mnt/external-hdd/mitsubachi/backups/wal \
+  -maxdepth 1 \
+  -type f \
+  -printf '%f %s bytes\n'
+```
+
+重要な制約:
+
+```text
+- WAL アーカイブだけでは復旧できない。
+- PITR には定期的なベースバックアップが別途必要。
+- 外付け HDD が外れると WAL アーカイブは失敗し、失敗が続くと pg_wal が肥大化する。
+- WAL を日数だけで自動削除してはいけない。
+- find /mnt/external-hdd/mitsubachi/backups/wal -mtime +7 -delete のような削除は禁止。
+- 保存期限管理は pgBackRest や Barman の導入で扱う。
+```
+
 storage restore 例:
 
 ```bash
