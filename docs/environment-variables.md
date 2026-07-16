@@ -26,7 +26,26 @@
 | --- | --- | --- | --- | --- | --- |
 | `VITE_API_BASE_URL` | yes | no | `https://mitsubachi-api.shiosalt.com` | Vite build-time API base URL | rebuild frontend |
 
-`VITE_` variables are embedded in browser assets. Do not put `RESEND_API_KEY`, DB passwords, Rails master key, SMTP password, or signing keys into frontend env.
+`frontend.env` is managed as `root:deploy 0640`. `VITE_` variables are embedded in browser assets. Do not put `RESEND_API_KEY`, DB passwords, Rails master key, SMTP password, signing keys, certificate private keys, or ACME credentials into frontend env.
+
+Production:
+
+```env
+VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
+```
+
+LAN verification:
+
+```env
+VITE_API_BASE_URL=http://192.168.10.151
+```
+
+After changing this value, rebuild only the frontend:
+
+```bash
+sudo mitsubachi-infra config show
+sudo mitsubachi-infra deploy --frontend
+```
 
 ## HTTPS config: `/etc/mitsubachi/config.yml`
 

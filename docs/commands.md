@@ -28,11 +28,21 @@ backend と frontend を Git repository から取得し、release directory を�
 
 ```bash
 sudo mitsubachi-infra deploy
+sudo mitsubachi-infra deploy --all
+sudo mitsubachi-infra deploy --backend
+sudo mitsubachi-infra deploy --frontend
 sudo mitsubachi-infra deploy --backend-ref main --frontend-ref main
 sudo mitsubachi-infra redeploy
 ```
 
 未 push の開発 Ubuntu 作業ツリーは本番へ入りません。本番では設定された Git repository と ref だけを取得します。
+
+`/etc/mitsubachi/frontend.env` の `VITE_API_BASE_URL` を変更した場合は frontend だけを再ビルドできます。
+
+```bash
+sudo mitsubachi-infra config show
+sudo mitsubachi-infra deploy --frontend
+```
 
 ## deploy-backend / deploy-frontend
 
@@ -59,6 +69,8 @@ production-check は本番 service、Nginx、TLS endpoint、Minecraft port 設�
 ```bash
 sudo mitsubachi-infra production-check
 mitsubachi-infra doctor
+mitsubachi-infra doctor frontend
+mitsubachi-infra config show
 ```
 
 ## https

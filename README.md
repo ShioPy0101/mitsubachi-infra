@@ -128,8 +128,13 @@ sudo mitsubachi-infra install --interactive
 sudo mitsubachi-infra install --dry-run
 sudo mitsubachi-infra install --interactive --remove-nginx-default-site
 sudo mitsubachi-infra deploy
+sudo mitsubachi-infra deploy --all
+sudo mitsubachi-infra deploy --frontend
+sudo mitsubachi-infra deploy --backend
 sudo mitsubachi-infra deploy backend --ref main
 sudo mitsubachi-infra deploy frontend --ref main
+sudo mitsubachi-infra config show
+sudo mitsubachi-infra doctor frontend
 sudo mitsubachi-infra rollback backend
 sudo mitsubachi-infra rollback frontend
 sudo mitsubachi-infra status
@@ -206,7 +211,45 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-環境変数は `/etc/mitsubachi/rails.env` と `/etc/mitsubachi/frontend.env` に分離します。`frontend.env` の `VITE_API_BASE_URL` は build 時に成果物へ埋め込まれるため、秘密情報を置いてはいけません。本番値は `https://mitsubachi-api.shiosalt.com` です。
+環境変数は `/etc/mitsubachi/rails.env` と `/etc/mitsubachi/frontend.env` に分離します。`frontend.env` の `VITE_API_BASE_URL` は Vite の build 時に JavaScript へ埋め込まれるため、frontend deploy は `npm run build` の子プロセスへこの値を明示的に渡します。`frontend.env` を配置するだけでは既存ビルド成果物は変わらないため、変更後は frontend を再デプロイしてください。
+
+`/etc/mitsubachi/frontend.env` は `root:deploy 0640` で管理します。`VITE_` 系は最終的にブラウザへ配信される公開情報です。DB password、Rails master key、secret key base、API secret、証明書秘密鍵、ACME credential は絶対に入れないでください。
+
+本番公開:
+
+```env
+VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
+```
+
+LAN内検証:
+
+```env
+VITE_API_BASE_URL=http://192.168.10.151
+```
+
+LAN内で frontend を `http://192.168.10.151` から開く場合、Rails API 側の CORS、Host Authorization、Cookie、CSRF 設定も LAN origin と整合させる必要があります。HTTPS 本番では Secure Cookie、SameSite、CORS 許可 Origin を `https://mitsubachi.shiosalt.com` に合わせて確認してください。
+
+復旧手順:
+
+```bash
+sudoedit /etc/mitsubachi/frontend.env
+# VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
+
+sudo mitsubachi-infra config show
+sudo mitsubachi-infra deploy --frontend
+
+curl -I https://mitsubachi.shiosalt.com
+curl -i https://mitsubachi-api.shiosalt.com/api/health/ready
+```
+
+LAN内検証の場合:
+
+```bash
+curl -I http://192.168.10.151
+curl -i -H 'Host: mitsubachi-api.shiosalt.com' http://127.0.0.1/api/health/ready
+```
+
+ブラウザでは強制再読み込みを行ってください。Cloudflare を使っている場合は HTML が古いまま残らないよう cache purge または bypass rule を確認します。
 
 rollback:
 
@@ -695,6 +738,20 @@ Cloudflare Proxy
 
 Cloudflare Tunnel
   今回の必須対象外。
+```
+
+Frontend cache:
+
+```text
+index.html
+  短い cache または no-cache を推奨。VITE_API_BASE_URL を変えた後に古い HTML が残ると、
+  古い JavaScript を読み続ける可能性がある。
+
+hash付き assets
+  長期 cache 可能。release/current 切り替え後は Nginx reload と health check を行う。
+
+Cloudflare
+  Proxy/CDN を使う場合は HTML の cache bypass または purge 手順を用意する。
 ```
 
 ## Environment variables

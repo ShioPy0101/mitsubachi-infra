@@ -50,10 +50,28 @@ journalctl -u mitsubachi-worker -n 200 --no-pager
 ## Frontend
 
 ```bash
+mitsubachi-infra config show
+mitsubachi-infra doctor frontend
 test -f /var/www/mitsubachi-frontend/current/dist/index.html
 curl -I https://mitsubachi.shiosalt.com
 curl -I https://mitsubachi.shiosalt.com/some/spa/path
 ```
+
+White screen with `VITE_API_BASE_URL is not configured`:
+
+```bash
+sudoedit /etc/mitsubachi/frontend.env
+# VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
+sudo mitsubachi-infra deploy --frontend
+```
+
+For LAN verification use:
+
+```env
+VITE_API_BASE_URL=http://192.168.10.151
+```
+
+Force refresh the browser after redeploy. If Cloudflare/CDN is enabled, purge or bypass HTML cache so old `index.html` does not keep loading old JavaScript.
 
 ## Network
 

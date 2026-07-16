@@ -40,10 +40,13 @@ mitsubachi-infra CLI
 3. release directory を作成する
 4. detached HEAD で commit SHA を checkout する
 5. backend は bundle install、migration、`bin/jobs` 確認を行う
-6. frontend は `frontend.env` を build 時に読み込み `npm run build` を行う
+6. frontend は `/etc/mitsubachi/frontend.env` を安全に解析し、`VITE_API_BASE_URL` を `npm run build` の環境変数として渡す
 7. 成功時だけ `current` を atomic に切り替える
-8. backend は `mitsubachi-api.service` と `mitsubachi-worker.service` を restart する
-9. Nginx と HTTPS endpoint を確認する
+8. frontend は `dist/index.html` を確認し、Nginx reload と health check を行う
+9. backend は `mitsubachi-api.service` と `mitsubachi-worker.service` を restart する
+10. Nginx と HTTPS endpoint を確認する
+
+Frontend の公開 root は `/var/www/mitsubachi-frontend/current/dist` です。SPA fallback は Nginx の `try_files $uri $uri/ /index.html;` で処理します。API domain とは分離し、`mitsubachi.shiosalt.com` は React/Vite、`mitsubachi-api.shiosalt.com` は Rails API へ向けます。
 
 ## Human Tasks
 
