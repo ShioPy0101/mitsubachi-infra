@@ -1,9 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-repo_root = File.expand_path("..", __dir__)
-$LOAD_PATH.unshift(File.join(repo_root, "lib"))
+repo_root = File.expand_path('..', __dir__)
+$LOAD_PATH.unshift(File.join(repo_root, 'lib'))
 
-require "mitsubachi_infra/cli"
+require 'mitsubachi_infra/cli'
 
 exit MitsubachiInfra::CLI.new(ARGV, repo_root: repo_root).run

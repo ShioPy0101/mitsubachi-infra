@@ -10,7 +10,7 @@
     ↓
 利用者が本番 Ubuntu へ SSH 接続
     ↓
-本番 Ubuntu 上で bundle exec ruby exe/mitsubachi-infra deploy
+本番 Ubuntu 上で ruby exe/mitsubachi-infra deploy
     ↓
 backend / frontend を Git から取得して release deploy
 ```

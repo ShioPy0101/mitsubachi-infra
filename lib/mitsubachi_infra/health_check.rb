@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require "net/http"
-require "uri"
-require "timeout"
-require_relative "errors"
+require 'net/http'
+require 'uri'
+require 'timeout'
+require_relative 'errors'
 
 module MitsubachiInfra
   class HealthCheck
@@ -19,7 +19,7 @@ module MitsubachiInfra
         code = http_code(url)
         return true if code == 200
 
-        @logger.puts("health check waiting #{index + 1}/#{attempts}: #{url} status=#{code || "error"}")
+        @logger.puts("health check waiting #{index + 1}/#{attempts}: #{url} status=#{code || 'error'}")
         sleep delay
       end
       raise Error, "health check failed: #{url}"
@@ -29,7 +29,7 @@ module MitsubachiInfra
 
     def http_code(url)
       uri = URI(url)
-      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https", read_timeout: 5, open_timeout: 5) do |http|
+      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 5, open_timeout: 5) do |http|
         http.get(uri.request_uri).code.to_i
       end
     rescue StandardError

@@ -3,6 +3,7 @@
 module MitsubachiInfra
   class Error < StandardError; end
   class ValidationError < Error; end
+
   class CommandError < Error
     attr_reader :command, :status, :stdout, :stderr
 
@@ -11,7 +12,7 @@ module MitsubachiInfra
       @status = status
       @stdout = stdout
       @stderr = stderr
-      super("command failed status=#{status}: #{command.join(" ")}")
+      super("command failed status=#{status}: #{command.join(' ')}")
     end
   end
 end

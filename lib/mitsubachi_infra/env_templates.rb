@@ -5,8 +5,8 @@ module MitsubachiInfra
     module_function
 
     def rails_env(config)
-      api = config.fetch("domains").fetch("api")
-      frontend = "https://#{config.fetch("domains").fetch("frontend")}"
+      api = config.fetch('domains').fetch('api')
+      frontend = "https://#{config.fetch('domains').fetch('frontend')}"
       <<~ENV
         RAILS_ENV=production
         RACK_ENV=production
@@ -33,7 +33,7 @@ module MitsubachiInfra
     end
 
     def frontend_env(config)
-      "VITE_API_BASE_URL=https://#{config.fetch("domains").fetch("api")}\n"
+      "VITE_API_BASE_URL=https://#{config.fetch('domains').fetch('api')}\n"
     end
   end
 end
