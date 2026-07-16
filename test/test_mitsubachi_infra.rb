@@ -1580,13 +1580,17 @@ class MitsubachiInfraTest < Minitest::Test
       config = production_config(dir)
       write_frontend_env(config, 'https://mitsubachi-api.shiosalt.com')
       runner = FrontendDeployRunner.new(dry_run: true)
+      health = FakeHealth.new
 
-      MitsubachiInfra::Deployment::Frontend.new(config: config, runner: runner, health: FakeHealth.new,
+      MitsubachiInfra::Deployment::Frontend.new(config: config, runner: runner, health: health,
                                                 logger: StringIO.new).deploy(ref: 'main')
 
       build = runner.calls.find { |command, _options| command == %w[npm run build] }
       refute_nil build
       assert_equal 'https://mitsubachi-api.shiosalt.com', build.last.fetch(:env).fetch('VITE_API_BASE_URL')
+      assert_equal 'http://127.0.0.1/', health.calls.first.first
+      assert_equal 'mitsubachi.shiosalt.com', health.calls.first.last[:host]
+      assert_equal true, health.calls.first.last[:allow_redirect]
     end
   end
 
@@ -1918,6 +1922,16 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_health_check_accepts_redirect_when_enabled
+    capture_health_sequence([301]) do |requests|
+      assert MitsubachiInfra::HealthCheck.new(logger: StringIO.new)
+                                        .check!('http://127.0.0.1/',
+                                                host: 'mitsubachi.shiosalt.com', attempts: 1, delay: 0,
+                                                allow_redirect: true)
+      assert_equal 'mitsubachi.shiosalt.com', requests.first['Host']
+    end
+  end
+
   def test_backend_deploy_health_check_uses_internal_url_and_api_host
     config = production_config('/tmp/mitsubachi-test')
     backend = MitsubachiInfra::Deployment::Backend.new(config: config, runner: RecordingRunner.new,
@@ -2156,6 +2170,41 @@ class MitsubachiInfraTest < Minitest::Test
       manager.cleanup
       assert_path_exists current
       refute_path_exists old
+    end
+  end
+
+  def test_release_manager_atomically_replaces_current_symlink
+    Dir.mktmpdir do |dir|
+      runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: false)
+      manager = MitsubachiInfra::Deployment::ReleaseManager.new(root: dir, runner: runner, keep: 5)
+      FileUtils.mkdir_p(manager.releases_dir)
+      old = File.join(manager.releases_dir, 'old')
+      new_release = File.join(manager.releases_dir, 'new')
+      FileUtils.mkdir_p(old)
+      FileUtils.mkdir_p(new_release)
+      File.symlink(old, manager.current_link)
+
+      manager.activate(new_release)
+
+      assert File.symlink?(manager.current_link)
+      assert_equal new_release, File.realpath(manager.current_link)
+      assert_empty Dir.glob(File.join(dir, '.current.tmp.*'))
+    end
+  end
+
+  def test_release_manager_rejects_current_directory
+    Dir.mktmpdir do |dir|
+      runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: false)
+      manager = MitsubachiInfra::Deployment::ReleaseManager.new(root: dir, runner: runner, keep: 5)
+      FileUtils.mkdir_p(manager.releases_dir)
+      release = File.join(manager.releases_dir, 'new')
+      FileUtils.mkdir_p(release)
+      FileUtils.mkdir_p(manager.current_link)
+
+      error = assert_raises(MitsubachiInfra::Error) { manager.activate(release) }
+
+      assert_includes error.message, 'current path exists and is not a symlink'
+      assert_path_exists manager.current_link
     end
   end
 

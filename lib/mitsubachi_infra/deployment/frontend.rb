@@ -40,7 +40,8 @@ module MitsubachiInfra
           manager.activate(release) unless @runner.dry_run
           @runner.run('nginx', '-t')
           @runner.run('systemctl', 'reload', 'nginx')
-          @health.check!(frontend_health_url, dry_run: @runner.dry_run)
+          @health.check!(frontend_health_url, dry_run: @runner.dry_run, host: frontend_health_host,
+                                               allow_redirect: @config.public?)
           manager.cleanup
         rescue StandardError
           FileUtils.rm_rf(release) unless @runner.dry_run || manager.current_release == release
@@ -60,7 +61,11 @@ module MitsubachiInfra
       end
 
       def frontend_health_url
-        @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
+        @config.public? ? 'http://127.0.0.1/' : "http://#{@config.fetch('server_ip')}/"
+      end
+
+      def frontend_health_host
+        @config.public? ? @config.frontend_host : nil
       end
 
     end

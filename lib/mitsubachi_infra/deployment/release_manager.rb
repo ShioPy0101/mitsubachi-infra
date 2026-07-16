@@ -4,6 +4,7 @@ require 'English'
 require 'fileutils'
 require 'securerandom'
 require 'time'
+require_relative '../errors'
 
 module MitsubachiInfra
   module Deployment
@@ -59,8 +60,12 @@ module MitsubachiInfra
       def activate(path)
         parent = File.dirname(current_link)
         tmp = File.join(parent, ".current.tmp.#{$PROCESS_ID}")
-        FileUtils.ln_sf(path, tmp)
-        FileUtils.mv(tmp, current_link, force: true)
+        assert_replaceable_current!
+        FileUtils.rm_f(tmp)
+        File.symlink(path, tmp)
+        File.rename(tmp, current_link)
+      ensure
+        FileUtils.rm_f(tmp) if tmp
       end
 
       def cleanup(protected_paths: [])
@@ -81,6 +86,13 @@ module MitsubachiInfra
 
           FileUtils.rm_rf(path) unless @runner.dry_run
         end
+      end
+
+      def assert_replaceable_current!
+        return unless File.exist?(current_link) || File.symlink?(current_link)
+        return if File.symlink?(current_link)
+
+        raise Error, "current path exists and is not a symlink: #{current_link}"
       end
     end
   end

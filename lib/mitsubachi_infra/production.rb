@@ -177,7 +177,9 @@ module MitsubachiInfra
         activate(root, release)
         privileged('nginx', '-t')
         privileged('systemctl', 'reload', 'nginx')
-        HealthCheck.new(logger: @logger).check!(frontend_health_url, dry_run: @runner.dry_run)
+        HealthCheck.new(logger: @logger).check!(frontend_health_url, dry_run: @runner.dry_run,
+                                                                     host: frontend_health_host,
+                                                                     allow_redirect: @config.public?)
         cleanup(root, keep: app.fetch('keep_releases'))
       rescue StandardError
         FileUtils.rm_rf(release) unless @runner.dry_run || current_release(root) == release
@@ -357,7 +359,11 @@ module MitsubachiInfra
     end
 
     def frontend_health_url
-      @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
+      @config.public? ? 'http://127.0.0.1/' : "http://#{@config.fetch('server_ip')}/"
+    end
+
+    def frontend_health_host
+      @config.public? ? @config.frontend_host : nil
     end
 
     def backend_health_url
@@ -406,8 +412,22 @@ module MitsubachiInfra
 
     def activate(root, release)
       tmp = File.join(root, ".current.tmp.#{$PROCESS_ID}")
-      FileUtils.ln_sf(release, tmp) unless @runner.dry_run
-      FileUtils.mv(tmp, File.join(root, 'current'), force: true) unless @runner.dry_run
+      current = File.join(root, 'current')
+      return if @runner.dry_run
+
+      assert_replaceable_current!(current)
+      FileUtils.rm_f(tmp)
+      File.symlink(release, tmp)
+      File.rename(tmp, current)
+    ensure
+      FileUtils.rm_f(tmp) if tmp
+    end
+
+    def assert_replaceable_current!(current)
+      return unless File.exist?(current) || File.symlink?(current)
+      return if File.symlink?(current)
+
+      raise Error, "current path exists and is not a symlink: #{current}"
     end
 
     def cleanup(root, keep:, protected_paths: [])

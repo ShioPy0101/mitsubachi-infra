@@ -11,7 +11,8 @@ module MitsubachiInfra
       @logger = logger
     end
 
-    def check!(url, attempts: 30, delay: 1, dry_run: false, host: nil, open_timeout: 2, read_timeout: 5)
+    def check!(url, attempts: 30, delay: 1, dry_run: false, host: nil, open_timeout: 2, read_timeout: 5,
+               allow_redirect: false)
       raise Error, 'health check Host header is required' if host.to_s.empty? && local_http_url?(url)
 
       @logger.puts("[DRY-RUN] health check #{url}#{host ? " Host=#{host}" : ''}") if dry_run
@@ -19,7 +20,7 @@ module MitsubachiInfra
 
       attempts.times do |index|
         code = http_code(url, host: host, open_timeout: open_timeout, read_timeout: read_timeout)
-        return true if code&.between?(200, 299)
+        return true if successful_status?(code, allow_redirect: allow_redirect)
         if code == 403
           raise Error, [
             'Rails returned HTTP 403.',
@@ -36,6 +37,13 @@ module MitsubachiInfra
     end
 
     private
+
+    def successful_status?(code, allow_redirect:)
+      return false unless code
+      return true if code.between?(200, 299)
+
+      allow_redirect && code.between?(300, 399)
+    end
 
     def http_code(url, host:, open_timeout:, read_timeout:)
       uri = URI(url)
