@@ -11,6 +11,9 @@ module MitsubachiInfra
       /(RAILS_MASTER_KEY=)[^\s]+/,
       /(SECRET_KEY_BASE=)[^\s]+/,
       /(RESEND_API_KEY=)[^\s]+/,
+      /(SMTP_PASSWORD=)[^\s]+/,
+      /([A-Z0-9_]*(?:PASSWORD|TOKEN|SECRET)=)[^\s]+/,
+      /(-----BEGIN [A-Z ]*PRIVATE KEY-----).*?(-----END [A-Z ]*PRIVATE KEY-----)/m,
       %r{(postgres(?:ql)?://[^:/@\s]+:)[^@\s]+(@)}
     ].freeze
 
@@ -29,8 +32,9 @@ module MitsubachiInfra
 
     def run(*command, env: {}, chdir: nil, timeout: 600, user: nil, deploy_env: nil, allow_failure: false)
       argv = command.flatten.compact.map(&:to_s)
-      argv = user_command(user, deploy_env, argv) if user
-      log_command(argv, chdir)
+      display_user = user
+      argv = user_command(user, deploy_env, argv) if present?(user)
+      log_command(argv, chdir, user: display_user)
       return Result.new(stdout: '', stderr: '', status: 0) if dry_run
 
       stdout = +''
@@ -50,14 +54,15 @@ module MitsubachiInfra
         status = wait.exitstatus
       end
       result = Result.new(stdout: stdout, stderr: stderr, status: status)
+      log_output(stdout, stderr) if result.success?
       if !result.success? && !allow_failure
         raise CommandError.new(command: argv, status: status, stdout: mask(stdout),
-                               stderr: mask(stderr))
+                               stderr: mask(stderr), chdir: chdir, user: display_user, timeout: timeout)
       end
 
       result
     rescue Timeout::Error
-      raise Error, "command timed out: #{mask(argv.join(' '))}"
+      raise Error, "command timed out after #{timeout}s: #{mask(argv.join(' '))}"
     end
 
     def deploy(*command, config:, chdir: nil, timeout: 600, allow_failure: false, env: {})
@@ -91,15 +96,25 @@ module MitsubachiInfra
 
     private
 
+    def present?(value)
+      !value.nil? && value.to_s != ''
+    end
+
     def user_command(user, deploy_env, argv)
       env_args = deploy_env.to_a.flat_map { |key, value| ["#{key}=#{value}"] }
       ['sudo', '-u', user, '-H', 'env', *env_args, *argv]
     end
 
-    def log_command(argv, chdir)
+    def log_command(argv, chdir, user:)
       prefix = dry_run ? '[DRY-RUN]' : '[RUN]'
       dir = chdir ? " cwd=#{chdir}" : ''
-      @logger.puts("#{prefix}#{dir} #{mask(argv.join(' '))}")
+      run_user = user ? " user=#{user}" : ''
+      @logger.puts("#{prefix}#{dir}#{run_user} #{mask(argv.join(' '))}")
+    end
+
+    def log_output(stdout, stderr)
+      @logger.puts("[STDOUT] #{mask(stdout).strip}") unless stdout.to_s.strip.empty?
+      @logger.puts("[STDERR] #{mask(stderr).strip}") unless stderr.to_s.strip.empty?
     end
   end
 end
