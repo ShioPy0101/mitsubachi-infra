@@ -1,6 +1,6 @@
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen 80<%= default_server_suffix %>;
+    listen [::]:80<%= default_server_suffix %>;
     server_name _;
 
     return 444;

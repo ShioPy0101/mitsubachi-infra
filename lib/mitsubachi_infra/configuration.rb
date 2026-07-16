@@ -44,6 +44,10 @@ module MitsubachiInfra
         'ruby_version' => '3.3.7',
         'node_major' => 22
       },
+      'nginx' => {
+        'default_server' => false,
+        'remove_default_site' => false
+      },
       'backend' => {
         'repository' => 'git@github.com:ShioPy0101/mitsubachi-ruby.git',
         'ref' => 'main',

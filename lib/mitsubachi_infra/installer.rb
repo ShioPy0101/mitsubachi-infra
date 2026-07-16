@@ -25,7 +25,8 @@ module MitsubachiInfra
       @repo_root = repo_root
     end
 
-    def install(interactive: false)
+    def install(interactive: false, remove_nginx_default_site: nil)
+      @remove_nginx_default_site = remove_nginx_default_site
       @runner.run('apt-get', 'update')
       @runner.run('apt-get', 'install', '-y', *PACKAGES)
       DeployUser.new(config: @config, runner: @runner).ensure!
@@ -55,7 +56,8 @@ module MitsubachiInfra
 
     def install_templates
       nginx = Nginx.new(config: @config, runner: @runner, repo_root: @repo_root)
-      nginx.install(mode: @config.public? ? 'public_http_challenge' : 'lan')
+      nginx.install(mode: @config.public? ? 'public_http_challenge' : 'lan',
+                    remove_default_site: remove_nginx_default_site?)
       install_systemd_unit('mitsubachi-api.service', 'mitsubachi-api.service.erb')
       install_systemd_unit('mitsubachi-worker.service', 'mitsubachi-jobs.service.erb')
       Systemd.new(runner: @runner).daemon_reload
@@ -80,6 +82,12 @@ module MitsubachiInfra
                   health: HealthCheck.new(logger: $stderr)).enable(staging: @config.fetch('https').fetch('staging'))
     rescue Error => e
       warn "warning: HTTPS enable failed; keeping HTTP configuration: #{e.message}"
+    end
+
+    def remove_nginx_default_site?
+      return @remove_nginx_default_site unless @remove_nginx_default_site.nil?
+
+      @config.fetch('nginx').fetch('remove_default_site')
     end
   end
 end

@@ -68,10 +68,16 @@ module MitsubachiInfra
     end
 
     def install
-      local = { interactive: false }
-      OptionParser.new { |opts| opts.on('--interactive') { local[:interactive] = true } }.parse!(@argv)
+      local = { interactive: false, remove_nginx_default_site: nil }
+      OptionParser.new do |opts|
+        opts.on('--interactive') { local[:interactive] = true }
+        opts.on('--remove-nginx-default-site') { local[:remove_nginx_default_site] = true }
+      end.parse!(@argv)
       locked do
-        Installer.new(config: @config, runner: @runner, repo_root: @repo_root).install(interactive: local[:interactive])
+        Installer.new(config: @config, runner: @runner, repo_root: @repo_root).install(
+          interactive: local[:interactive],
+          remove_nginx_default_site: local[:remove_nginx_default_site]
+        )
       end
     end
 
@@ -144,7 +150,7 @@ module MitsubachiInfra
         Usage:
           mitsubachi-infra bootstrap [--dry-run]
           mitsubachi-infra configure [--dry-run]
-          mitsubachi-infra install [--interactive] [--dry-run]
+          mitsubachi-infra install [--interactive] [--remove-nginx-default-site] [--dry-run]
           mitsubachi-infra deploy [all|backend|frontend] [--ref REF] [--dry-run]
           mitsubachi-infra deploy-backend [--dry-run]
           mitsubachi-infra deploy-frontend [--dry-run]
