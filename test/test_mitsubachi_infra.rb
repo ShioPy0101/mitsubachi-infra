@@ -12,9 +12,12 @@ $LOAD_PATH.unshift(File.join(ROOT, 'lib'))
 
 require 'mitsubachi_infra/command_runner'
 require 'mitsubachi_infra/configuration'
+require 'mitsubachi_infra/cli'
 require 'mitsubachi_infra/env_templates'
 require 'mitsubachi_infra/health_check'
+require 'mitsubachi_infra/installer'
 require 'mitsubachi_infra/nginx'
+require 'mitsubachi_infra/node_runtime'
 require 'mitsubachi_infra/deployment/release_manager'
 require 'mitsubachi_infra/errors'
 require 'mitsubachi_infra/production'
@@ -32,6 +35,45 @@ class MitsubachiInfraTest < Minitest::Test
 
     def run(*command, **_options)
       @commands << command.flatten.map(&:to_s)
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+
+    def deploy(*command, **options)
+      run(*command, **options)
+    end
+  end
+
+  class FakeHealth
+    attr_reader :calls
+
+    def initialize(error: nil)
+      @error = error
+      @calls = []
+    end
+
+    def check!(url, **options)
+      @calls << [url, options]
+      raise @error if @error
+
+      true
+    end
+  end
+
+  class NodeRunner < RecordingRunner
+    def initialize(node_stdout:)
+      super()
+      @node_stdout = Array(node_stdout)
+    end
+
+    def run(*command, **options)
+      argv = command.flatten.map(&:to_s)
+      @commands << argv
+      if argv == %w[node --version]
+        stdout = @node_stdout.length > 1 ? @node_stdout.shift : @node_stdout.first
+        return MitsubachiInfra::CommandRunner::Result.new(stdout: stdout.to_s, stderr: '', status: stdout ? 0 : 1)
+      end
+      return MitsubachiInfra::CommandRunner::Result.new(stdout: '10.0.0', stderr: '', status: 0) if argv == %w[npm --version]
+
       MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
     end
   end
@@ -92,7 +134,7 @@ class MitsubachiInfraTest < Minitest::Test
   end
 
   def config_data(overrides = {})
-    MitsubachiInfra::Configuration::DEFAULT.merge(overrides)
+    MitsubachiInfra::Configuration::DEFAULT.merge('server_ip' => '192.168.1.50').merge(overrides)
   end
 
   def nginx_paths(root)
@@ -135,6 +177,17 @@ class MitsubachiInfraTest < Minitest::Test
     if Net::HTTP.singleton_class.method_defined?(:mitsubachi_original_start)
       Net::HTTP.singleton_class.alias_method(:start, :mitsubachi_original_start)
       Net::HTTP.singleton_class.remove_method(:mitsubachi_original_start)
+    end
+  end
+
+  def with_euid(value)
+    Process.singleton_class.alias_method(:mitsubachi_original_euid, :euid)
+    Process.define_singleton_method(:euid) { value }
+    yield
+  ensure
+    if Process.singleton_class.method_defined?(:mitsubachi_original_euid)
+      Process.singleton_class.alias_method(:euid, :mitsubachi_original_euid)
+      Process.singleton_class.remove_method(:mitsubachi_original_euid)
     end
   end
 
@@ -277,6 +330,192 @@ class MitsubachiInfraTest < Minitest::Test
     runner.run('true', user: 'deploy')
 
     assert_includes io.string, 'sudo -u deploy'
+  end
+
+  def test_cli_installed_entrypoint_loads_outside_repository
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      installer = MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                                 repo_root: ROOT, cli_root: cli_root, cli_link: cli_link)
+
+      installer.send(:install_cli)
+
+      Dir.chdir('/tmp') do
+        assert system(cli_link, 'help', out: File::NULL, err: File::NULL)
+      end
+    end
+  end
+
+  def test_cli_install_is_atomic
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      bad_repo = File.join(dir, 'bad-repo')
+      FileUtils.mkdir_p(File.join(bad_repo, 'bin'))
+      File.write(File.join(bad_repo, 'bin', 'mitsubachi-infra'), "#!/usr/bin/env ruby\n")
+      FileUtils.mkdir_p(File.dirname(cli_link))
+      installer = MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                                 repo_root: bad_repo, cli_root: cli_root, cli_link: cli_link)
+
+      assert_raises(Errno::ENOENT) { installer.send(:install_cli) }
+      refute_path_exists cli_link
+      assert_empty Dir.glob(File.join(cli_root, 'releases', '*.tmp'))
+    end
+  end
+
+  def test_install_rejects_non_root_before_lock
+    with_euid(1000) do
+      io = StringIO.new
+      cli = MitsubachiInfra::CLI.new(%w[--config /missing install], repo_root: ROOT)
+      $stderr = io
+      assert_equal 1, cli.run
+      assert_includes io.string, 'install must be run as root'
+      assert_includes io.string, 'hint: sudo mitsubachi-infra install'
+      refute_includes io.string, 'Permission denied'
+    ensure
+      $stderr = STDERR
+    end
+  end
+
+  def test_install_interactive_prompts_for_missing_server_ip
+    Dir.mktmpdir do |dir|
+      config = MitsubachiInfra::Configuration.new(File.join(dir, 'config.yml'),
+                                                  data: MitsubachiInfra::Configuration::DEFAULT, validate: false)
+      output = StringIO.new
+      installer = MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
+                                                 input: StringIO.new("192.168.10.151\ny\n"), output: output)
+
+      installer.send(:prepare_configuration, interactive: true)
+
+      assert_equal '192.168.10.151', config.fetch('server_ip')
+      assert_includes output.string, 'LAN server private IPv4'
+      assert_includes output.string, 'Install summary'
+    end
+  end
+
+  def test_install_non_interactive_rejects_missing_required_config
+    config = MitsubachiInfra::Configuration.new('/missing', data: MitsubachiInfra::Configuration::DEFAULT,
+                                                          validate: false)
+    runner = RecordingRunner.new
+    installer = MitsubachiInfra::Installer.new(config: config, runner: runner, repo_root: ROOT)
+
+    error = assert_raises(MitsubachiInfra::ValidationError) do
+      installer.install(interactive: false)
+    end
+
+    assert_includes error.message, 'missing required configuration: server_ip'
+    assert_empty runner.commands
+  end
+
+  def test_install_does_not_use_example_server_ip_as_default
+    config = MitsubachiInfra::Configuration.new('/missing', data: MitsubachiInfra::Configuration::DEFAULT,
+                                                          validate: false)
+
+    assert_nil config.fetch('server_ip')
+    assert_includes config.missing_required_settings, 'server_ip'
+  end
+
+  def test_install_uses_health_check_retry
+    Dir.mktmpdir do |dir|
+      health = FakeHealth.new
+      installer = MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                                 repo_root: ROOT, health: health)
+
+      installer.send(:verify_install)
+
+      assert_equal 1, health.calls.length
+      assert_equal 'mitsubachi-api.shiosalt.com', health.calls.first.last[:host]
+      assert_equal 30, health.calls.first.last.fetch(:attempts, 30)
+    end
+  end
+
+  def test_install_reports_service_diagnostics_after_health_timeout
+    Dir.mktmpdir do |dir|
+      runner = RecordingRunner.new
+      health = FakeHealth.new(error: MitsubachiInfra::Error.new('health check failed'))
+      installer = MitsubachiInfra::Installer.new(config: production_config(dir), runner: runner, repo_root: ROOT,
+                                                 health: health)
+
+      assert_raises(MitsubachiInfra::Error) { installer.send(:verify_install) }
+
+      assert_includes runner.commands, %w[systemctl status mitsubachi-api.service --no-pager]
+      assert_includes runner.commands, %w[journalctl -u mitsubachi-api.service -n 100 --no-pager]
+      assert_includes runner.commands, %w[ss -ltnp]
+    end
+  end
+
+  def test_node_major_is_validated
+    config = production_config('/tmp/mitsubachi-test')
+    runner = NodeRunner.new(node_stdout: ["v12.22.9\n", "v22.1.0\n", "v22.1.0\n"])
+
+    MitsubachiInfra::NodeRuntime.new(config: config, runner: runner).ensure!
+
+    assert runner.commands.any? { |command| command == %w[apt-get install -y nodejs] }
+    assert_includes runner.commands, %w[node --version]
+    assert_includes runner.commands, %w[npm --version]
+  end
+
+  def test_install_summary_does_not_expose_secrets
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      output = StringIO.new
+      installer = MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
+                                                 output: output)
+
+      installer.send(:prepare_configuration, interactive: false)
+
+      refute_includes output.string, 'SECRET_KEY_BASE'
+      refute_includes output.string, 'DATABASE_URL'
+      assert_includes output.string, 'Install summary'
+    end
+  end
+
+  def test_existing_valid_config_skips_interactive_questions
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      output = StringIO.new
+      installer = MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
+                                                 input: StringIO.new("y\n"), output: output)
+
+      installer.send(:prepare_configuration, interactive: true)
+
+      refute_includes output.string, 'LAN server private IPv4'
+      assert_includes output.string, 'Continue install?'
+    end
+  end
+
+  def test_public_mode_health_host_uses_api_domain
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      health = FakeHealth.new
+      MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
+                                     health: health).send(:verify_install)
+
+      assert_equal 'mitsubachi-api.shiosalt.com', health.calls.first.last[:host]
+    end
+  end
+
+  def test_lan_mode_health_host_uses_explicit_server_ip
+    Dir.mktmpdir do |dir|
+      config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+        'deployment_mode' => 'lan',
+        'server_ip' => '192.168.10.151',
+        'paths' => {
+          'rails_root' => File.join(dir, 'rails'),
+          'frontend_root' => File.join(dir, 'frontend'),
+          'rails_env' => File.join(dir, 'etc', 'rails.env'),
+          'frontend_env' => File.join(dir, 'etc', 'frontend.env'),
+          'server_id' => File.join(dir, 'etc', 'server-id')
+        }
+      ))
+      health = FakeHealth.new
+      MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new, repo_root: ROOT,
+                                     health: health).send(:verify_install)
+
+      assert_equal '192.168.10.151', health.calls.first.last[:host]
+    end
   end
 
   def test_public_http_nginx_separates_frontend_and_api_without_ssl

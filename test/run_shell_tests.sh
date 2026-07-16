@@ -42,13 +42,14 @@ run_expect_success "ruby unit tests" ruby "${ROOT}/test/test_mitsubachi_infra.rb
 run_expect_success "cli status dry-run json" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" --dry-run status --json
 grep -F '"deployment_mode": "lan"' /tmp/mitsubachi-test.out >/dev/null || fail "status json contains deployment mode"
 
-run_expect_success "cli deploy backend dry-run" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" --dry-run deploy backend --ref main
-grep -F '[DRY-RUN]' /tmp/mitsubachi-test.err >/dev/null || fail "deploy dry-run logs commands"
+run_expect_failure "cli deploy backend dry-run requires root" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" --dry-run deploy backend --ref main
+grep -F 'deploy must be run as root' /tmp/mitsubachi-test.err >/dev/null || fail "deploy root error is clear"
 
-run_expect_success "cli rollback dry-run parses" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" --dry-run rollback backend
+run_expect_failure "cli rollback dry-run requires root" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" --dry-run rollback backend
+grep -F 'rollback must be run as root' /tmp/mitsubachi-test.err >/dev/null || fail "rollback root error is clear"
 
-run_expect_success "cli https enable dry-run staging parses" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.public.yml" --dry-run https enable --staging
-grep -F 'certbot certonly' /tmp/mitsubachi-test.err >/dev/null || fail "https dry-run plans certbot"
+run_expect_failure "cli https enable dry-run staging requires root" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.public.yml" --dry-run https enable --staging
+grep -F 'https must be run as root' /tmp/mitsubachi-test.err >/dev/null || fail "https root error is clear"
 
 run_expect_success "legacy scripts still expose help" bash "${ROOT}/scripts/deploy_api.sh" --help
 run_expect_success "rollback legacy help" bash "${ROOT}/scripts/rollback_api.sh" --help
