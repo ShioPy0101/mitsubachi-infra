@@ -85,6 +85,7 @@ module MitsubachiInfra
       FileUtils.cp(File.join(@repo_root, 'bin', 'mitsubachi-infra'), File.join(tmp, 'bin', 'mitsubachi-infra'))
       FileUtils.chmod(0o755, File.join(tmp, 'bin', 'mitsubachi-infra'))
       FileUtils.cp_r(File.join(@repo_root, 'lib', 'mitsubachi_infra'), File.join(tmp, 'lib'))
+      FileUtils.cp_r(File.join(@repo_root, 'templates'), tmp)
       FileUtils.mkdir_p(File.join(@cli_root, 'releases'))
       FileUtils.mv(tmp, release)
       release_created = true

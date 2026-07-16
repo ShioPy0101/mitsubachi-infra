@@ -1083,6 +1083,27 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_cli_install_copies_runtime_templates
+    Dir.mktmpdir do |dir|
+      cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
+      cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
+      FileUtils.mkdir_p(File.dirname(cli_link))
+
+      MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
+                                     repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
+
+      release = Dir.glob(File.join(cli_root, 'releases', '*')).find { |path| File.directory?(path) }
+      assert_path_exists File.join(release, 'templates', 'nginx', 'public_http_challenge.conf.erb')
+      assert_path_exists File.join(release, 'templates', 'nginx', 'public_https.conf.erb')
+      assert_path_exists File.join(release, 'templates', 'systemd', 'mitsubachi-api.service.erb')
+
+      rendered = MitsubachiInfra::Nginx.new(config: production_config(dir), runner: RecordingRunner.new,
+                                            repo_root: release).render(mode: 'public_http_challenge')
+      assert_includes rendered, 'server_name mitsubachi.shiosalt.com'
+      assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com'
+    end
+  end
+
   def test_fileutils_mv_reproduces_same_file_for_symlinks_but_file_rename_succeeds
     Dir.mktmpdir do |dir|
       target = File.join(dir, 'target')
