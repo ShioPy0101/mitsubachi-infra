@@ -6,7 +6,30 @@
 systemctl status nginx
 journalctl -u nginx -n 200 --no-pager
 nginx -t
+ss -ltnp | grep -E ':(80|443)\b'
 ```
+
+Mitsubachi の server block は通常 `default_server` を付けません。既存の他サービスや Ubuntu default site は勝手に削除しません。`/etc/nginx/sites-enabled/default` を外す必要がある場合だけ、明示オプションで symlink を無効化します。
+
+## Certbot / HTTPS
+
+```bash
+mitsubachi-infra https status
+certbot certificates
+systemctl status certbot.timer
+systemctl list-timers certbot.timer
+curl -Iv https://mitsubachi.shiosalt.com/
+curl -Iv https://mitsubachi-api.shiosalt.com/api/health/ready
+```
+
+証明書は frontend/API の host ごとに個別管理します。
+
+```text
+/etc/letsencrypt/live/mitsubachi.shiosalt.com/fullchain.pem
+/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem
+```
+
+`https enable --staging` は Certbot staging endpoint だけを使います。通常の `https enable` は production endpoint を使い、staging 証明書を production として再利用しません。
 
 ## Rails API
 
@@ -45,6 +68,7 @@ Common causes:
 
 * DNS A/AAAA record does not point to production IP
 * router does not forward 80/443
+* Cloudflare Proxy is enabled before origin HTTPS / upload / timeout behavior is verified
 * Nginx cannot read frontend `dist`
 * Rails is not listening on `127.0.0.1:3000`
 * `rails.env` is missing required DB URLs or Resend variables

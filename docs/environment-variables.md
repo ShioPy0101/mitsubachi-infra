@@ -27,3 +27,21 @@
 | `VITE_API_BASE_URL` | yes | no | `https://mitsubachi-api.shiosalt.com` | Vite build-time API base URL | rebuild frontend |
 
 `VITE_` variables are embedded in browser assets. Do not put `RESEND_API_KEY`, DB passwords, Rails master key, SMTP password, or signing keys into frontend env.
+
+## HTTPS config: `/etc/mitsubachi/config.yml`
+
+HTTPS の公開 host は Rails/frontend env ではなく infra config で管理します。frontend と Rails API は別 host です。
+
+```yaml
+deployment_mode: public
+
+https:
+  frontend_host: mitsubachi.shiosalt.com
+  api_host: mitsubachi-api.shiosalt.com
+  email: admin@example.com
+  challenge: http-01
+  acme_webroot: /var/lib/mitsubachi/acme
+  enable_hsts: false
+```
+
+`https.host` は旧 schema であり拒否されます。`staging` は永続設定ではなく、`mitsubachi-infra https enable --staging` の CLI オプションとしてだけ指定します。証明書秘密鍵や ACME account credential は config/env に保存しません。

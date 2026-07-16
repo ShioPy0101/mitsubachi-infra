@@ -629,9 +629,32 @@ sudo ./scripts/configure_local_network.sh \
 
 ## Public HTTPS
 
-public mode は Nginx の automatic HTTPS で実装します。証明書の取得・更新は Nginx に任せ、証明書秘密鍵を Git や frontend env に置きません。
+public mode は Nginx + Certbot で HTTPS を実装します。Certbot が Let's Encrypt 証明書の取得・更新を担当し、Nginx が取得済み証明書を使って TLS 終端、frontend 静的配信、Rails API への reverse proxy、HTTP から HTTPS への redirect、ACME HTTP-01 challenge の公開を担当します。
 
-`/etc/mitsubachi/config.yml` で `deployment_mode: public`、`https.host`、`https.email` を設定し、先に DNS と port forwarding を確認してください。
+`/etc/mitsubachi/config.yml` では frontend と Rails API を別 host として設定します。`staging` は永続設定へ保存せず、`https enable --staging` の CLI オプションだけで指定します。旧 `https.host` は拒否されます。
+
+```yaml
+deployment_mode: public
+
+https:
+  frontend_host: mitsubachi.shiosalt.com
+  api_host: mitsubachi-api.shiosalt.com
+  email: admin@example.com
+  challenge: http-01
+  acme_webroot: /var/lib/mitsubachi/acme
+  enable_hsts: false
+```
+
+証明書は host ごとに個別取得します。
+
+```text
+/etc/letsencrypt/live/mitsubachi.shiosalt.com/fullchain.pem
+/etc/letsencrypt/live/mitsubachi.shiosalt.com/privkey.pem
+/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem
+/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/privkey.pem
+```
+
+先に DNS と port forwarding を確認してください。
 
 ```bash
 sudo mitsubachi-infra https check
@@ -641,7 +664,7 @@ sudo mitsubachi-infra https renew
 sudo mitsubachi-infra https status
 ```
 
-HTTPS は `nginx -t` 成功後に reload します。DNS が本番 Ubuntu を指していない場合、Certbot の ACME 証明書取得は失敗します。
+通常の `https enable` は production の Let's Encrypt endpoint を使います。`--staging` が明示された場合だけ staging endpoint を使い、staging 証明書は production 証明書として再利用しません。HTTPS 設定は `nginx -t` 成功後にだけ reload します。DNS が本番 Ubuntu を指していない場合、Certbot の ACME 証明書取得は失敗します。
 
 router / DNS:
 
@@ -653,7 +676,7 @@ TCP 443
   public HTTPS に必要。
 
 A / AAAA record
-  files.example.com などの hostname を自宅サーバーの public IP へ向ける。
+  mitsubachi.shiosalt.com と mitsubachi-api.shiosalt.com を本番サーバーの public IP へ向ける。
 
 CGNAT
   ISP の CGNAT 配下では通常の port forwarding が使えない可能性がある。
@@ -665,13 +688,13 @@ Cloudflare:
 
 ```text
 DNS only
-  通信は自宅サーバーへ直接到達する。origin 側に証明書が必要で、80/443 forwarding も必要。
+  初期推奨。Let's Encrypt HTTP-01 を origin で直接処理するため、router で TCP 80/443 forwarding が必要。
 
 Cloudflare Proxy
-  Cloudflare 経由になる。real IP 設定、upload size、timeout、大容量 download/stream への影響を確認する。origin HTTPS を推奨。
+  将来対応。origin HTTPS、real IP 設定、upload size、timeout、大容量 upload/download、Range Request への影響を確認する。初期推奨ではない。
 
 Cloudflare Tunnel
-  将来追加可能な構造にするが、この Infra の初期実装では必須にしない。
+  今回の必須対象外。
 ```
 
 ## Environment variables

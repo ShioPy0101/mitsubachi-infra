@@ -55,3 +55,57 @@ mitsubachi-infra CLI
 * `/etc/mitsubachi/rails.env` の秘密値を設定する
 * Resend の送信元、SPF、DKIM、DMARC を確認する
 * Minecraft 25565/25566 が既存どおり到達することを確認する
+
+## HTTPS
+
+正式構成は Nginx + Certbot です。Caddy は採用しません。Nginx と Caddy を同時に 80/443 へ bind しないでください。
+
+`/etc/mitsubachi/config.yml` の HTTPS schema:
+
+```yaml
+deployment_mode: public
+
+https:
+  frontend_host: mitsubachi.shiosalt.com
+  api_host: mitsubachi-api.shiosalt.com
+  email: admin@example.com
+  challenge: http-01
+  acme_webroot: /var/lib/mitsubachi/acme
+  enable_hsts: false
+```
+
+Certbot は frontend/API それぞれの証明書を個別に取得します。`staging` は config に保存せず、`sudo mitsubachi-infra https enable --staging` のときだけ使います。production の `https enable` は staging 証明書を production 証明書として再利用しません。
+
+事前確認:
+
+```bash
+dig +short A mitsubachi.shiosalt.com
+dig +short AAAA mitsubachi.shiosalt.com
+dig +short A mitsubachi-api.shiosalt.com
+dig +short AAAA mitsubachi-api.shiosalt.com
+
+sudo nginx -t
+sudo ss -ltnp | grep -E ':(80|443)\b'
+sudo ufw status verbose
+sudo systemctl status nginx
+```
+
+有効化:
+
+```bash
+sudo mitsubachi-infra https check
+sudo mitsubachi-infra https enable --staging
+sudo mitsubachi-infra https enable
+```
+
+確認:
+
+```bash
+sudo certbot certificates
+sudo systemctl status certbot.timer
+sudo systemctl list-timers certbot.timer
+curl -Iv https://mitsubachi.shiosalt.com/
+curl -Iv https://mitsubachi-api.shiosalt.com/api/health/ready
+```
+
+Cloudflare は初期運用では DNS only を推奨します。Cloudflare Proxy は大容量 upload/download、Range Request、timeout、real client IP、Cloudflare 側 upload 制限への影響を確認するまで完全対応済みとして扱いません。
