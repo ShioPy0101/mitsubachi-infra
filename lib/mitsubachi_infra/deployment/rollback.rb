@@ -57,11 +57,11 @@ module MitsubachiInfra
       end
 
       def backend_health_url
-        @config.public? ? "https://#{@config.fetch('https').fetch('host')}/api/health" : "http://#{@config.fetch('server_ip')}/api/health"
+        @config.public? ? "https://#{@config.fetch('domains').fetch('api')}/api/health" : "http://#{@config.fetch('server_ip')}/api/health"
       end
 
       def frontend_health_url
-        @config.public? ? "https://#{@config.fetch('https').fetch('host')}/" : "http://#{@config.fetch('server_ip')}/"
+        @config.public? ? "https://#{@config.fetch('domains').fetch('frontend')}/" : "http://#{@config.fetch('server_ip')}/"
       end
     end
   end

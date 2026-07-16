@@ -40,6 +40,10 @@ module MitsubachiInfra
       },
       'release_retention' => 5,
       'acme_email' => nil,
+      'runtime' => {
+        'ruby_version' => '3.3.7',
+        'node_major' => 22
+      },
       'backend' => {
         'repository' => 'git@github.com:ShioPy0101/mitsubachi-ruby.git',
         'ref' => 'main',
@@ -95,6 +99,10 @@ module MitsubachiInfra
 
     def production_api_url
       "https://#{data.fetch('domains').fetch('api')}"
+    end
+
+    def certificate_domains
+      [data.fetch('domains').fetch('frontend'), data.fetch('domains').fetch('api')].uniq
     end
 
     def public?
@@ -168,7 +176,7 @@ module MitsubachiInfra
 
       host = https['host'].to_s
       email = https['email'].to_s
-      validate_public_host!(host)
+      validate_public_host!(host) unless host.empty?
       return if email.match?(/\A[^@\s]+@[^@\s]+\.[^@\s]+\z/)
 
       raise ValidationError,
