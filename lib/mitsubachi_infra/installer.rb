@@ -32,6 +32,8 @@ module MitsubachiInfra
       lib/mitsubachi_infra/nginx.rb
       lib/mitsubachi_infra/systemd.rb
       lib/mitsubachi_infra/frontend_env.rb
+      templates/nginx/nginx.conf.erb
+      templates/nginx/conf.d/mitsubachi-logging.conf.erb
       templates/nginx/lan.conf.erb
       templates/nginx/public_http_challenge.conf.erb
       templates/nginx/public_https.conf.erb
