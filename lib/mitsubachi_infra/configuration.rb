@@ -46,7 +46,7 @@ module MitsubachiInfra
       'nginx' => {
         'default_server' => false,
         'remove_default_site' => false,
-        'error_log_level' => 'warn'
+        'error_log_level' => 'info'
       },
       'backend' => {
         'repository' => 'git@github.com:ShioPy0101/mitsubachi-ruby.git',
