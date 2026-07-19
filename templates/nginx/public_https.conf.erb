@@ -80,6 +80,8 @@ server {
         proxy_connect_timeout 30s;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+
+        access_log /var/log/nginx/mitsubachi-api-diagnostic.log mitsubachi_diagnostic;
     }
 
     location /internal/storage/drive_items/ {

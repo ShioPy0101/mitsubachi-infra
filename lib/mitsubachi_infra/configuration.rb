@@ -45,7 +45,8 @@ module MitsubachiInfra
       },
       'nginx' => {
         'default_server' => false,
-        'remove_default_site' => false
+        'remove_default_site' => false,
+        'error_log_level' => 'warn'
       },
       'backend' => {
         'repository' => 'git@github.com:ShioPy0101/mitsubachi-ruby.git',
@@ -168,6 +169,7 @@ module MitsubachiInfra
       validate_app!('frontend')
       validate_frontend!
       validate_https!
+      validate_nginx!
       validate_postgresql!
       true
     end
@@ -260,6 +262,13 @@ module MitsubachiInfra
 
       raise ValidationError,
             'https.email is required in public mode'
+    end
+
+    def validate_nginx!
+      level = data.fetch('nginx').fetch('error_log_level')
+      return if %w[debug info notice warn error crit alert emerg].include?(level)
+
+      raise ValidationError, 'nginx.error_log_level must be one of debug, info, notice, warn, error, crit, alert, emerg'
     end
 
     def validate_postgresql!

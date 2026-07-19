@@ -33,6 +33,9 @@ ports:
 release_retention: 5
 acme_email: admin@shiosalt.com
 
+nginx:
+  error_log_level: warn
+
 backend:
   repository: git@github.com:ShioPy0101/mitsubachi-ruby.git
   ref: main
