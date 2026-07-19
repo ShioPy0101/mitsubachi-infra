@@ -133,7 +133,7 @@ class MitsubachiInfraTest < Minitest::Test
     def run(*command, allow_failure: false, **_options)
       argv = command.flatten.map(&:to_s)
       @commands << argv
-      return nginx_result(allow_failure: allow_failure) if argv == %w[nginx -t]
+      return nginx_result(allow_failure: allow_failure) if argv[0, 2] == %w[nginx -t]
 
       apply_filesystem_command(argv) unless dry_run
       MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
@@ -163,7 +163,10 @@ class MitsubachiInfraTest < Minitest::Test
       if argv[0, 7] == ['install', '-o', 'root', '-g', 'root', '-m', '0644']
         FileUtils.mkdir_p(File.dirname(argv[8]))
         FileUtils.cp(argv[7], argv[8])
+      elsif argv[0, 7] == ['install', '-d', '-o', 'root', '-g', 'root', '-m', '0755']
+        argv[7..].each { |path| FileUtils.mkdir_p(path) }
       elsif argv[0, 2] == ['cp', '-a']
+        FileUtils.mkdir_p(File.dirname(argv[3]))
         FileUtils.cp(argv[2], argv[3])
       elsif argv[0, 2] == ['rm', '-f']
         FileUtils.rm_f(argv[2])
@@ -171,6 +174,9 @@ class MitsubachiInfraTest < Minitest::Test
         FileUtils.mkdir_p(File.dirname(argv[3]))
         FileUtils.rm_f(argv[3])
         FileUtils.ln_sf(argv[2], argv[3])
+      elsif argv[0, 2] == ['mv', '-f']
+        FileUtils.mkdir_p(File.dirname(argv[3]))
+        FileUtils.mv(argv[2], argv[3])
       end
     end
   end
@@ -374,10 +380,12 @@ class MitsubachiInfraTest < Minitest::Test
     {
       nginx_conf: File.join(root, 'nginx.conf'),
       conf_d: File.join(root, 'conf.d'),
+      logging_conf: File.join(root, 'conf.d', 'mitsubachi-logging.conf'),
       sites_enabled: File.join(root, 'sites-enabled'),
       target: File.join(root, 'sites-available', 'mitsubachi.conf'),
       enabled: File.join(root, 'sites-enabled', 'mitsubachi.conf'),
-      ubuntu_default: File.join(root, 'sites-enabled', 'default')
+      ubuntu_default: File.join(root, 'sites-enabled', 'default'),
+      backup_root: File.join(root, 'backups', 'nginx')
     }
   end
 
@@ -506,6 +514,8 @@ class MitsubachiInfraTest < Minitest::Test
       'lib/mitsubachi_infra/nginx.rb',
       'lib/mitsubachi_infra/systemd.rb',
       'lib/mitsubachi_infra/frontend_env.rb',
+      'templates/nginx/nginx.conf.erb',
+      'templates/nginx/conf.d/mitsubachi-logging.conf.erb',
       'templates/nginx/lan.conf.erb',
       'templates/nginx/public_http_challenge.conf.erb',
       'templates/nginx/public_https.conf.erb',
@@ -1952,6 +1962,32 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi.shiosalt.com/fullchain.pem'
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem'
     assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
+    assert_includes rendered, 'access_log /var/log/nginx/mitsubachi-api-diagnostic.log mitsubachi_diagnostic;'
+  end
+
+  def test_nginx_conf_template_preserves_ubuntu_baseline_with_configured_error_log_level
+    config = MitsubachiInfra::Configuration.new('/missing', data: config_data('nginx' => {
+                                                                                 'error_log_level' => 'info'
+                                                                               }))
+    rendered = MitsubachiInfra::Nginx.new(config: config, runner: RecordingRunner.new, repo_root: ROOT)
+                                 .render_nginx_conf
+
+    assert_includes rendered, "worker_processes auto;\n"
+    assert_includes rendered, "include /etc/nginx/modules-enabled/*.conf;\n"
+    assert_includes rendered, "        # multi_accept on;\n"
+    assert_includes rendered, "        gzip on;\n"
+    assert_includes rendered, "        ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;\n"
+    assert_includes rendered, "        include /etc/nginx/conf.d/*.conf;\n        include /etc/nginx/sites-enabled/*;\n"
+    assert_includes rendered, "        error_log /var/log/nginx/error.log info;\n"
+  end
+
+  def test_nginx_logging_template_defines_diagnostic_format
+    rendered = MitsubachiInfra::Nginx.new(config: production_config('/tmp/mitsubachi-test'),
+                                         runner: RecordingRunner.new, repo_root: ROOT).render_logging_conf
+
+    assert_includes rendered, 'log_format mitsubachi_diagnostic'
+    assert_includes rendered, 'upstream_status="$upstream_status"'
+    assert_includes rendered, 'upstream_response_time="$upstream_response_time"'
   end
 
   def test_certbot_obtains_frontend_and_api_certificates
@@ -2274,6 +2310,48 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_nginx_install_skips_write_backup_and_reload_when_rendered_content_matches
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      config = production_config(dir)
+      nginx = build_nginx(config, RecordingRunner.new, paths)
+      File.write(paths[:nginx_conf], nginx.render_nginx_conf)
+      File.write(paths[:logging_conf], nginx.render_logging_conf)
+      File.write(paths[:target], nginx.render(mode: 'public_http_challenge'))
+      FileUtils.ln_sf(paths[:target], paths[:enabled])
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0])
+
+      build_nginx(config, runner, paths).install(mode: 'public_http_challenge')
+
+      assert_equal [%w[nginx -t]], runner.commands
+      refute_path_exists paths[:backup_root]
+    end
+  end
+
+  def test_nginx_install_backs_up_nginx_conf_and_tests_staged_config_before_rename
+    Dir.mktmpdir do |dir|
+      paths = prepare_nginx_tree(dir)
+      runner = NginxFilesystemRunner.new(nginx_statuses: [0, 0, 0])
+
+      build_nginx(production_config(dir), runner, paths).install(mode: 'public_http_challenge')
+
+      commands = runner.commands.map { |command| command.join(' ') }
+      backup = commands.index { |command| command.start_with?("cp -a #{paths[:nginx_conf]} #{paths[:backup_root]}/") }
+      staged_test = commands.index { |command| command.start_with?("nginx -t -c #{paths[:nginx_conf]}.mitsubachi-") }
+      rename = commands.index { |command| command.start_with?("mv -f #{paths[:nginx_conf]}.mitsubachi-") }
+      reload = commands.index('systemctl reload nginx')
+
+      refute_nil backup
+      refute_nil staged_test
+      refute_nil rename
+      refute_nil reload
+      assert backup < staged_test
+      assert staged_test < rename
+      assert rename < reload
+      assert_path_exists Dir.glob(File.join(paths[:backup_root], '*', 'nginx.conf')).first
+    end
+  end
+
   def test_nginx_detects_default_server_in_other_file_when_candidate_is_default
     Dir.mktmpdir do |dir|
       paths = prepare_nginx_tree(dir)
@@ -2317,7 +2395,7 @@ class MitsubachiInfraTest < Minitest::Test
 
       assert_equal "old config\n", File.read(paths[:target])
       assert_equal paths[:target], File.readlink(paths[:enabled])
-      assert_equal 3, runner.commands.count { |command| command == %w[nginx -t] }
+      assert_equal 3, runner.commands.count { |command| command[0, 2] == %w[nginx -t] }
       assert runner.commands.none? { |command| command == ['systemctl', 'reload', 'nginx'] }
     end
   end
