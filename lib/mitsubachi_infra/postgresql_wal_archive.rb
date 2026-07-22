@@ -423,6 +423,7 @@ module MitsubachiInfra
         'archive_timeout' => archive_timeout
       }
       desired.each do |name, value|
+        next if name == 'archive_timeout' && same_duration?(settings.fetch(name), value)
         next if settings.fetch(name).to_s == value.to_s
 
         run_alter_system(cluster, name, value)
@@ -494,7 +495,7 @@ module MitsubachiInfra
         settings.fetch('wal_level') != EXPECTED_WAL_LEVEL ||
         settings.fetch('archive_mode') != 'on' ||
         settings.fetch('archive_command') != archive_command ||
-        settings.fetch('archive_timeout') != archive_timeout
+        !same_duration?(settings.fetch('archive_timeout'), archive_timeout)
     end
 
     def verify_runtime!(cluster)
@@ -504,7 +505,7 @@ module MitsubachiInfra
       unless settings.fetch('archive_command') == archive_command
         raise Error, "archive_command is #{settings.fetch('archive_command')}, expected #{archive_command}"
       end
-      unless settings.fetch('archive_timeout') == archive_timeout
+      unless same_duration?(settings.fetch('archive_timeout'), archive_timeout)
         raise Error, "archive_timeout is #{settings.fetch('archive_timeout')}, expected #{archive_timeout}"
       end
       library = settings.fetch('archive_library')
@@ -636,9 +637,27 @@ module MitsubachiInfra
       return 'WARNING' if free[:available_percent] && free[:available_percent] < 10
       return 'WARNING' if archiver['last_failed_time'].to_s > archiver['last_archived_time'].to_s
       return 'WARNING' unless settings.fetch('wal_level') == EXPECTED_WAL_LEVEL
-      return 'WARNING' unless settings.fetch('archive_timeout') == archive_timeout
+      return 'WARNING' unless same_duration?(settings.fetch('archive_timeout'), archive_timeout)
 
       'OK'
+    end
+
+    def same_duration?(left, right)
+      left_seconds = duration_seconds(left)
+      right_seconds = duration_seconds(right)
+      return left_seconds == right_seconds if left_seconds && right_seconds
+
+      left.to_s == right.to_s
+    end
+
+    def duration_seconds(value)
+      text = value.to_s.strip.downcase
+      return Regexp.last_match(1).to_i if text.match?(/\A(\d+)\z/)
+      return Regexp.last_match(1).to_i if text.match?(/\A(\d+)\s*s(?:ec(?:ond)?s?)?\z/)
+      return Regexp.last_match(1).to_i * 60 if text.match?(/\A(\d+)\s*m(?:in(?:ute)?s?)?\z/)
+      return Regexp.last_match(1).to_i * 3600 if text.match?(/\A(\d+)\s*h(?:our)?s?\z/)
+
+      nil
     end
 
     def path_owner(path)
