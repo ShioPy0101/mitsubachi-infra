@@ -63,9 +63,13 @@ https:
 postgresql:
   wal_archive:
     mount_point: /mnt/external-hdd
-    archive_directory: /mnt/external-hdd/mitsubachi/backups/wal
-    archive_script: /usr/local/libexec/mitsubachi/archive-wal
-    config_filename: 90-mitsubachi-wal-archive.conf
+    root_directory: /mnt/external-hdd/mitsubachi/postgresql
+    archive_directory: /mnt/external-hdd/mitsubachi/postgresql/wal-archive
+    base_backup_directory: /mnt/external-hdd/mitsubachi/postgresql/base-backups
+    scripts_directory: /mnt/external-hdd/mitsubachi/postgresql/scripts
+    archive_script: /usr/local/lib/mitsubachi-infra/postgresql/archive-wal
     version:
     cluster:
-    archive_timeout:
+    archive_timeout: 300s
+    base_backup_retention_days: 30
+    minimum_base_backups: 2
