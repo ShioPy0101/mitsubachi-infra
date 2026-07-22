@@ -344,7 +344,7 @@ class MitsubachiInfraTest < Minitest::Test
       @commands << argv
       return result(@cluster_output) if argv == %w[pg_lsclusters --no-header]
       return psql_result(argv) if argv[0, 4] == %w[sudo -u postgres psql]
-      if argv[0, 4] == %w[sudo -u postgres postgres]
+      if argv[0, 3] == %w[sudo -u postgres] && (argv[3] == 'postgres' || argv[3].end_with?('/bin/postgres'))
         raise MitsubachiInfra::CommandError.new(command: argv, status: 1, stdout: '', stderr: 'invalid setting') if @fail_config_check
 
         return result('on')
@@ -813,6 +813,28 @@ class MitsubachiInfraTest < Minitest::Test
       end
       assert_includes error.message, 'invalid setting'
       assert_equal 0, runner.restarts
+    end
+  end
+
+  def test_postgresql_wal_archive_uses_versioned_postgres_binary_for_config_validation
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings)
+      binary = '/usr/lib/postgresql/16/bin/postgres'
+
+      patch_singleton(File, :executable?, lambda { |original, path|
+        path == binary || original.call(path)
+      }) do
+        MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).enable
+      end
+
+      validation = runner.commands.find { |command| command[0, 4] == ['sudo', '-u', 'postgres', binary] }
+      assert validation
+      assert_equal settings.fetch('data_directory'), validation[validation.index('-D') + 1]
+      assert_equal "config_file=#{settings.fetch('config_file')}", validation[validation.index('-c') + 1]
     end
   end
 

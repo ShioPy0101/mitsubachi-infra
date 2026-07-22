@@ -482,8 +482,10 @@ module MitsubachiInfra
     end
 
     def validate_postgresql_config!(cluster)
-      @runner.run('sudo', '-u', 'postgres', 'postgres', '-D', current_settings(cluster).fetch('data_directory'), '-C',
-                  'archive_mode')
+      settings = current_settings(cluster)
+      @runner.run('sudo', '-u', 'postgres', postgres_binary(cluster), '-D',
+                  settings.fetch('data_directory'), '-c', "config_file=#{settings.fetch('config_file')}",
+                  '-C', 'archive_mode')
     end
 
     def restart_required?(settings, script_changed:, config_changed:)
@@ -522,6 +524,13 @@ module MitsubachiInfra
       warnings << "#{mount_point} is not mounted" unless rows[:mount_mounted]
       warnings << 'WAL archive has recent failures' if rows[:last_failed_time].to_s > rows[:last_archived_time].to_s
       warnings
+    end
+
+    def postgres_binary(cluster)
+      versioned = File.join('/usr/lib/postgresql', cluster.version, 'bin', 'postgres')
+      return versioned if File.executable?(versioned)
+
+      'postgres'
     end
 
     def apply_root_directory!(root)
