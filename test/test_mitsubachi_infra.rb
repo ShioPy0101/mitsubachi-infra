@@ -831,7 +831,10 @@ class MitsubachiInfraTest < Minitest::Test
         MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).enable
       end
 
-      assert runner.commands.any? { |command| command[0, 4] == ['sudo', '-u', 'postgres', binary] }
+      validation = runner.commands.find { |command| command[0, 4] == ['sudo', '-u', 'postgres', binary] }
+      assert validation
+      assert_equal settings.fetch('data_directory'), validation[validation.index('-D') + 1]
+      assert_equal "config_file=#{settings.fetch('config_file')}", validation[validation.index('-c') + 1]
     end
   end
 

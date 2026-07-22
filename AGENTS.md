@@ -51,6 +51,8 @@ git branch --show-current
 git switch -c feat/<topic>
 ```
 
+一度pushしたcommit、または利用者が取り込んだ可能性があるcommitは、利用者から明示的に依頼されていない限り書き換えないこと。`git commit --amend`、interactive rebase、通常rebase、force pushは避け、修正は追加commitとして積む。
+
 誤って `main` にcommitした場合は、pushする前に次の順序で修正すること。
 
 ```text

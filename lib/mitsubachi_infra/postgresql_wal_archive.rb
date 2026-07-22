@@ -482,8 +482,10 @@ module MitsubachiInfra
     end
 
     def validate_postgresql_config!(cluster)
+      settings = current_settings(cluster)
       @runner.run('sudo', '-u', 'postgres', postgres_binary(cluster), '-D',
-                  current_settings(cluster).fetch('data_directory'), '-C', 'archive_mode')
+                  settings.fetch('data_directory'), '-c', "config_file=#{settings.fetch('config_file')}",
+                  '-C', 'archive_mode')
     end
 
     def restart_required?(settings, script_changed:, config_changed:)
