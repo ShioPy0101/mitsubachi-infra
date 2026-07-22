@@ -62,23 +62,29 @@ Frontend の公開 root は `/var/www/mitsubachi-frontend/current/dist` です�
 
 ## PostgreSQL WAL Archive
 
-WAL アーカイブは通常 deploy とは別に有効化します。`pg_wal` を直接コピーせず、PostgreSQL の `archive_command` が `/usr/local/libexec/mitsubachi/archive-wal %p %f` を呼び出して外付け HDD へ保存します。
+WAL アーカイブは通常 deploy とは別に有効化します。`pg_wal` を直接コピーせず、PostgreSQL の `archive_command` が `/usr/local/lib/mitsubachi-infra/postgresql/archive-wal %p %f` を呼び出して外付け HDD へ保存します。
 
 ```bash
-sudo mitsubachi-infra postgres wal-archive configure
-sudo mitsubachi-infra postgres wal-archive configure --verify
+sudo mitsubachi-infra postgres wal-archive enable
+sudo mitsubachi-infra postgres wal-archive enable --verify
+sudo mitsubachi-infra postgres wal-archive test
 sudo mitsubachi-infra postgres wal-archive status
+sudo mitsubachi-infra postgres base-backup create
+sudo mitsubachi-infra postgres base-backup prune --dry-run
 ```
 
 保存先:
 
 ```text
-/mnt/external-hdd/mitsubachi/backups/wal
+/mnt/external-hdd/mitsubachi/postgresql/
+├── wal-archive/
+├── base-backups/
+└── scripts/
 ```
 
 `archive-wal` は実行ごとに `/mnt/external-hdd` が mount point であることを確認します。外付け HDD が外れた場合は非0で失敗し、PostgreSQL は WAL を `pg_wal` に保持して再試行します。失敗が続くと `pg_wal` が肥大化するため、`postgres wal-archive status` と `pg_stat_archiver` を監視してください。
 
-WAL アーカイブだけでは復旧できません。PITR にはベースバックアップが必要です。WAL を `find -mtime -delete` のように日数だけで削除する運用は禁止し、保存期限管理は pgBackRest / Barman などで扱います。
+WAL アーカイブだけでは復旧できません。PITR にはベースバックアップが必要です。`base-backup create` で `pg_basebackup` によるベースバックアップを作成し、`base-backup prune` はベースバックアップのみを安全に削除します。WAL を `find -mtime -delete` のように日数だけで削除する運用は禁止です。同じ物理ディスクへの保存はディスク故障対策にならないため、別媒体への複製と復元訓練が必要です。
 
 ## HTTPS
 
