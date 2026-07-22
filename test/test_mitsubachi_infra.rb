@@ -784,6 +784,23 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_postgresql_wal_archive_accepts_postgresql_normalized_archive_timeout
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      expected = MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: RecordingRunner.new,
+                                                           logger: StringIO.new).archive_command
+      settings = wal_settings(dir, archive_command: expected).merge('archive_timeout' => '5min')
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings)
+
+      MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).enable
+
+      assert_equal 0, runner.restarts
+      refute runner.commands.any? { |command| command.last == "ALTER SYSTEM SET archive_timeout = '300s';" }
+    end
+  end
+
   def test_postgresql_wal_archive_refuses_multiple_online_clusters
     Dir.mktmpdir do |dir|
       config = wal_config(dir)
