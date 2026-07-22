@@ -316,11 +316,18 @@ class MitsubachiInfraTest < Minitest::Test
   class WalArchiveRunner < RecordingRunner
     attr_reader :restarts
 
-    def initialize(cluster_output:, settings:, archiver_stats: nil, after_restart_settings: nil, dry_run: false)
+    def initialize(cluster_output:, settings:, archiver_stats: nil, after_restart_settings: nil, dry_run: false,
+                   fail_config_check: false, verifybackup_status: 0, basebackup_status: 0, findmnt_status: 0,
+                   postgres_write_status: 0)
       super(dry_run: dry_run)
       @cluster_output = cluster_output
       @settings = settings.dup
       @after_restart_settings = after_restart_settings
+      @fail_config_check = fail_config_check
+      @verifybackup_status = verifybackup_status
+      @basebackup_status = basebackup_status
+      @findmnt_status = findmnt_status
+      @postgres_write_status = postgres_write_status
       @archiver_stats = archiver_stats || {
         'archived_count' => '0',
         'failed_count' => '0',
@@ -337,16 +344,45 @@ class MitsubachiInfraTest < Minitest::Test
       @commands << argv
       return result(@cluster_output) if argv == %w[pg_lsclusters --no-header]
       return psql_result(argv) if argv[0, 4] == %w[sudo -u postgres psql]
-      return result('on') if argv[0, 4] == %w[sudo -u postgres postgres]
-      return result('') if argv[0] == 'findmnt'
-      return result('') if argv[0] == 'install'
+      if argv[0, 4] == %w[sudo -u postgres postgres]
+        raise MitsubachiInfra::CommandError.new(command: argv, status: 1, stdout: '', stderr: 'invalid setting') if @fail_config_check
+
+        return result('on')
+      end
+      if argv[0] == 'findmnt'
+        raise MitsubachiInfra::CommandError.new(command: argv, status: @findmnt_status, stdout: '', stderr: 'not mounted') unless @findmnt_status.zero? || options[:allow_failure]
+
+        return result('', status: @findmnt_status, stderr: @findmnt_status.zero? ? '' : 'not mounted')
+      end
+      if argv[0] == 'install'
+        FileUtils.mkdir_p(argv.last) if argv[1] == '-d' && !dry_run
+        return result('')
+      end
       return result('') if argv[0] == 'chown'
       return result('') if argv[0] == 'chmod'
       return result('') if argv[0] == 'bash'
-      return result('') if argv[0, 3] == %w[sudo -u postgres] && argv[3] == 'test'
+      if argv[0, 3] == %w[sudo -u postgres] && argv[3] == 'test'
+        raise MitsubachiInfra::CommandError.new(command: argv, status: @postgres_write_status, stdout: '', stderr: 'not writable') unless @postgres_write_status.zero?
+
+        return result('')
+      end
+      if argv[0, 4] == %w[sudo -u postgres pg_basebackup]
+        raise MitsubachiInfra::CommandError.new(command: argv, status: @basebackup_status, stdout: '', stderr: 'basebackup failed') unless @basebackup_status.zero?
+
+        return result("pg_basebackup ok\n")
+      end
+      return result('', status: @verifybackup_status, stderr: @verifybackup_status.zero? ? '' : 'verify failed') if argv[0] == 'pg_verifybackup'
       if argv[0] == 'pg_ctlcluster'
         @restarts += 1
         @settings.merge!(@after_restart_settings) if @after_restart_settings
+        return result('')
+      end
+      if argv[0, 2] == %w[mv -T]
+        FileUtils.mv(argv[2], argv[3]) unless dry_run
+        return result('')
+      end
+      if argv[0, 2] == %w[rm -rf]
+        FileUtils.rm_rf(argv[2]) unless dry_run
         return result('')
       end
       return result("1G\t#{argv.last}\n") if argv[0] == 'du'
@@ -359,9 +395,17 @@ class MitsubachiInfraTest < Minitest::Test
       sql = argv.last
       if sql.start_with?('SHOW ')
         key = sql.delete_suffix(';').split.last
+        return result("16.9\n") if key == 'server_version'
+
         return result("#{@settings.fetch(key)}\n")
       end
-      return result("#{@archiver_stats.values_at(*%w[archived_count failed_count last_archived_wal last_archived_time last_failed_wal last_failed_time]).join('|')}\n") if sql.include?('FROM pg_stat_archiver')
+      if sql.start_with?('ALTER SYSTEM SET ')
+        match = sql.match(/\AALTER SYSTEM SET ([a-z_]+) = '(.+)';\z/)
+        @settings[match[1]] = match[2].gsub("''", "'") if match
+        return result('')
+      end
+      return result("#{@archiver_stats.values_at(*%w[archived_count failed_count last_archived_wal last_archived_time last_failed_wal last_failed_time stats_reset]).join('|')}\n") if sql.include?('FROM pg_stat_archiver')
+      return result("0/2000028\n") if sql.include?('pg_current_wal_lsn')
       return result("0/3000028\n") if sql.include?('pg_switch_wal')
 
       result('')
@@ -435,12 +479,16 @@ class MitsubachiInfraTest < Minitest::Test
       'postgresql' => {
         'wal_archive' => {
           'mount_point' => mount,
-          'archive_directory' => File.join(mount, 'mitsubachi', 'backups', 'wal'),
-          'archive_script' => File.join(root, 'usr', 'local', 'libexec', 'mitsubachi', 'archive-wal'),
-          'config_filename' => '90-mitsubachi-wal-archive.conf',
+          'root_directory' => File.join(mount, 'mitsubachi', 'postgresql'),
+          'archive_directory' => File.join(mount, 'mitsubachi', 'postgresql', 'wal-archive'),
+          'base_backup_directory' => File.join(mount, 'mitsubachi', 'postgresql', 'base-backups'),
+          'scripts_directory' => File.join(mount, 'mitsubachi', 'postgresql', 'scripts'),
+          'archive_script' => File.join(root, 'usr', 'local', 'lib', 'mitsubachi-infra', 'postgresql', 'archive-wal'),
           'version' => nil,
           'cluster' => nil,
-          'archive_timeout' => nil
+          'archive_timeout' => '300s',
+          'base_backup_retention_days' => 30,
+          'minimum_base_backups' => 2
         }.merge(overrides)
       }
     )
@@ -455,10 +503,26 @@ class MitsubachiInfraTest < Minitest::Test
       'data_directory' => File.join(root, 'pgdata'),
       'config_file' => File.join(pg_root, 'postgresql.conf'),
       'hba_file' => File.join(pg_root, 'pg_hba.conf'),
+      'wal_level' => 'replica',
       'archive_mode' => archive_command.empty? ? 'off' : 'on',
       'archive_command' => archive_command,
+      'archive_timeout' => '300s',
       'archive_library' => ''
     }
+  end
+
+  def write_archive_script_fixture(root, config)
+    script_path = File.join(root, 'archive-wal')
+    content = MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: RecordingRunner.new,
+                                                        logger: StringIO.new).archive_script_content
+    File.write(script_path, content)
+    FileUtils.chmod(0o755, script_path)
+    fake_bin = File.join(root, 'fake-bin')
+    FileUtils.mkdir_p(fake_bin)
+    fake_mountpoint = File.join(fake_bin, 'mountpoint')
+    File.write(fake_mountpoint, "#!/usr/bin/env bash\nexit 0\n")
+    FileUtils.chmod(0o755, fake_mountpoint)
+    [script_path, fake_bin]
   end
 
   def patch_file_singleton(method_name, replacement)
@@ -689,10 +753,10 @@ class MitsubachiInfraTest < Minitest::Test
       assert File.file?(archive_script)
       assert_match(/mountpoint -q "\$mount_point"/, File.read(archive_script))
       assert_match(/cmp --silent -- "\$source_path" "\$destination"/, File.read(archive_script))
-      conf = File.join(dir, 'postgresql', '16', 'main', 'conf.d', '90-mitsubachi-wal-archive.conf')
-      assert File.file?(conf)
-      assert_includes File.read(conf), 'archive_mode = on'
-      assert_includes File.read(conf), "archive_command = '#{archive_script} %p %f'"
+      assert_includes runner.commands, ['sudo', '-u', 'postgres', 'psql', '-p', '5432', '-At', '-v', 'ON_ERROR_STOP=1',
+                                        '-c', "ALTER SYSTEM SET archive_mode = 'on';"]
+      assert_includes runner.commands, ['sudo', '-u', 'postgres', 'psql', '-p', '5432', '-At', '-v', 'ON_ERROR_STOP=1',
+                                        '-c', "ALTER SYSTEM SET archive_command = '#{archive_script} %p %f';"]
       assert_equal 1, runner.restarts
       assert_includes runner.commands, %w[pg_ctlcluster 16 main restart]
     end
@@ -715,7 +779,7 @@ class MitsubachiInfraTest < Minitest::Test
                                      settings: settings)
       MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner2, logger: StringIO.new).configure
 
-      assert_equal 1, first_restarts
+      assert_equal 0, first_restarts
       assert_equal 0, runner2.restarts
     end
   end
@@ -736,19 +800,19 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
-  def test_postgresql_wal_archive_detects_archive_setting_conflicts
+  def test_postgresql_wal_archive_does_not_restart_when_postgresql_config_validation_fails
     Dir.mktmpdir do |dir|
       config = wal_config(dir)
       FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
       settings = wal_settings(dir)
-      File.write(File.join(dir, 'postgresql', '16', 'main', 'conf.d', '20-other.conf'), "archive_command = 'cp %p /tmp/%f'\n")
       runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
-                                    settings: settings)
+                                    settings: settings, fail_config_check: true)
 
-      error = assert_raises(MitsubachiInfra::ValidationError) do
+      error = assert_raises(MitsubachiInfra::Error) do
         MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).configure
       end
-      assert_includes error.message, 'conflicting PostgreSQL archive settings'
+      assert_includes error.message, 'invalid setting'
+      assert_equal 0, runner.restarts
     end
   end
 
@@ -761,7 +825,7 @@ class MitsubachiInfraTest < Minitest::Test
       MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).configure
 
       refute File.exist?(config.fetch('postgresql').fetch('wal_archive').fetch('archive_script'))
-      refute File.exist?(File.join(dir, 'postgresql', '16', 'main', 'conf.d', '90-mitsubachi-wal-archive.conf'))
+      assert runner.commands.any? { |command| command.last == "ALTER SYSTEM SET archive_mode = 'on';" }
     end
   end
 
@@ -779,6 +843,56 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_postgresql_wal_archive_script_accepts_existing_identical_wal
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      archive_dir = config.fetch('postgresql').fetch('wal_archive').fetch('archive_directory')
+      FileUtils.mkdir_p(archive_dir)
+      source = File.join(dir, 'source-wal')
+      wal_name = '000000010000000000000001'
+      File.write(source, 'same wal')
+      File.write(File.join(archive_dir, wal_name), 'same wal')
+      script_path, fake_bin = write_archive_script_fixture(dir, config)
+
+      assert system({ 'PATH' => "#{fake_bin}:#{ENV.fetch('PATH')}" }, script_path, source, wal_name,
+                    out: File::NULL, err: File::NULL)
+    end
+  end
+
+  def test_postgresql_wal_archive_script_rejects_existing_different_wal
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      archive_dir = config.fetch('postgresql').fetch('wal_archive').fetch('archive_directory')
+      FileUtils.mkdir_p(archive_dir)
+      source = File.join(dir, 'source-wal')
+      wal_name = '000000010000000000000001'
+      File.write(source, 'new wal')
+      File.write(File.join(archive_dir, wal_name), 'old wal')
+      script_path, fake_bin = write_archive_script_fixture(dir, config)
+
+      refute system({ 'PATH' => "#{fake_bin}:#{ENV.fetch('PATH')}" }, script_path, source, wal_name,
+                    out: File::NULL, err: File::NULL)
+      assert_equal 'old wal', File.read(File.join(archive_dir, wal_name))
+    end
+  end
+
+  def test_postgresql_wal_archive_script_copy_failure_returns_nonzero_without_final_wal
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      archive_dir = config.fetch('postgresql').fetch('wal_archive').fetch('archive_directory')
+      FileUtils.mkdir_p(archive_dir)
+      wal_name = '000000010000000000000001'
+      script_path, fake_bin = write_archive_script_fixture(dir, config)
+
+      refute system({ 'PATH' => "#{fake_bin}:#{ENV.fetch('PATH')}" }, script_path, File.join(dir, 'missing'), wal_name,
+                    out: File::NULL, err: File::NULL)
+      refute_path_exists File.join(archive_dir, wal_name)
+    end
+  end
+
   def test_postgres_wal_archive_requires_root_before_work
     with_euid(1000) do
       stderr = StringIO.new
@@ -788,6 +902,176 @@ class MitsubachiInfraTest < Minitest::Test
       assert_includes stderr.string, 'postgres must be run as root'
     ensure
       $stderr = original_stderr
+    end
+  end
+
+  def test_postgresql_wal_archive_enable_fails_when_mount_is_missing
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, findmnt_status: 1)
+
+      assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).enable
+      end
+      assert_equal 0, runner.restarts
+    end
+  end
+
+  def test_postgresql_wal_archive_enable_fails_when_postgres_cannot_write_archive_directory
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, postgres_write_status: 1)
+
+      assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).enable
+      end
+      assert_equal 0, runner.restarts
+    end
+  end
+
+  def test_postgresql_wal_archive_test_times_out
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      expected = MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: RecordingRunner.new,
+                                                           logger: StringIO.new).archive_command
+      settings = wal_settings(dir, archive_command: expected)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, dry_run: true)
+
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).test(timeout: 0)
+      end
+      assert_includes error.message, 'WAL archive did not complete within 0 seconds'
+    end
+  end
+
+  def test_postgresql_wal_archive_status_evaluates_archiver_failures
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      wal = config.fetch('postgresql').fetch('wal_archive')
+      FileUtils.mkdir_p([wal.fetch('mount_point'), wal.fetch('archive_directory')])
+      expected = MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: RecordingRunner.new,
+                                                           logger: StringIO.new).archive_command
+      settings = wal_settings(dir, archive_command: expected)
+      runner = WalArchiveRunner.new(
+        cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+        settings: settings,
+        archiver_stats: {
+          'archived_count' => '1',
+          'failed_count' => '1',
+          'last_archived_wal' => '000000010000000000000001',
+          'last_archived_time' => '2026-07-23 10:00:00+09',
+          'last_failed_wal' => '000000010000000000000002',
+          'last_failed_time' => '2026-07-23 10:05:00+09',
+          'stats_reset' => '2026-07-23 09:00:00+09'
+        }
+      )
+      stdout = StringIO.new
+      original_stdout = $stdout
+      $stdout = stdout
+
+      MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).status
+
+      assert_includes stdout.string, 'status: WARNING'
+      assert_includes stdout.string, 'warning: WAL archive has recent failures'
+    ensure
+      $stdout = original_stdout
+    end
+  end
+
+  def test_postgresql_wal_archive_disable_does_not_delete_backups
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      backup_dir = config.fetch('postgresql').fetch('wal_archive').fetch('base_backup_directory')
+      FileUtils.mkdir_p(File.join(backup_dir, '2026-07-23T120000+0900'))
+      expected = MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: RecordingRunner.new,
+                                                           logger: StringIO.new).archive_command
+      settings = wal_settings(dir, archive_command: expected)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, after_restart_settings: settings.merge('archive_mode' => 'off'))
+
+      MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).disable
+
+      assert_path_exists File.join(backup_dir, '2026-07-23T120000+0900')
+      refute runner.commands.any? { |command| command[0, 2] == %w[rm -rf] }
+    end
+  end
+
+  def test_postgresql_base_backup_create_uses_partial_and_verifies
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings)
+
+      MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).create_base_backup
+
+      assert runner.commands.any? { |command| command.include?('pg_basebackup') && command.any? { |part| part.end_with?('.partial') } }
+      assert runner.commands.any? { |command| command[0] == 'pg_verifybackup' && command[1].end_with?('.partial') }
+      assert runner.commands.any? { |command| command[0, 2] == %w[mv -T] }
+    end
+  end
+
+  def test_postgresql_base_backup_failure_keeps_partial
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, basebackup_status: 1)
+
+      assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).create_base_backup
+      end
+      assert Dir.children(config.fetch('postgresql').fetch('wal_archive').fetch('base_backup_directory')).any? { |name| name.end_with?('.partial') }
+      refute runner.commands.any? { |command| command[0, 2] == %w[mv -T] }
+    end
+  end
+
+  def test_postgresql_base_backup_verify_failure_is_not_success
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      FileUtils.mkdir_p(config.fetch('postgresql').fetch('wal_archive').fetch('mount_point'))
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, verifybackup_status: 1)
+
+      assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new).create_base_backup
+      end
+      refute runner.commands.any? { |command| command[0, 2] == %w[mv -T] }
+    end
+  end
+
+  def test_postgresql_base_backup_prune_dry_run_keeps_minimum_and_does_not_prune_wal
+    Dir.mktmpdir do |dir|
+      config = wal_config(dir)
+      wal = config.fetch('postgresql').fetch('wal_archive')
+      FileUtils.mkdir_p([wal.fetch('mount_point'), wal.fetch('archive_directory'), wal.fetch('base_backup_directory')])
+      %w[2026-01-01T000000+0900 2026-02-01T000000+0900 2026-03-01T000000+0900].each do |name|
+        FileUtils.mkdir_p(File.join(wal.fetch('base_backup_directory'), name))
+      end
+      File.write(File.join(wal.fetch('archive_directory'), '000000010000000000000001'), 'wal')
+      settings = wal_settings(dir)
+      runner = WalArchiveRunner.new(cluster_output: "16 main 5432 online postgres #{settings.fetch('data_directory')} /var/log/postgresql.log\n",
+                                    settings: settings, dry_run: true)
+      stdout = StringIO.new
+      original_stdout = $stdout
+      $stdout = stdout
+      MitsubachiInfra::PostgreSQLWalArchive.new(config: config, runner: runner, logger: StringIO.new)
+                                          .prune_base_backups(retention_days: 1, minimum: 2, dry_run: true)
+      assert_includes stdout.string, 'WAL archive pruning is not automatic'
+      assert_equal 1, stdout.string.scan('[DRY-RUN] remove').length
+      refute runner.commands.any? { |command| command[0, 2] == %w[rm -rf] }
+    ensure
+      $stdout = original_stdout
     end
   end
 

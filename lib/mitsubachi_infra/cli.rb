@@ -208,25 +208,48 @@ module MitsubachiInfra
 
     def postgres
       sub = @argv.shift
-      raise ValidationError, 'postgres command must be wal-archive' unless sub == 'wal-archive'
+      raise ValidationError, 'postgres command must be wal-archive or base-backup' unless %w[wal-archive base-backup].include?(sub)
 
       action = @argv.shift || 'status'
-      opts = { verify: false, json: false }
+      opts = { verify: false, json: false, yes: false, root_directory: nil, timeout: nil, retention_days: nil,
+               minimum: nil, checkpoint: 'fast' }
       OptionParser.new do |parser|
         parser.on('--verify') { opts[:verify] = true }
         parser.on('--json') { opts[:json] = true }
+        parser.on('--yes') { opts[:yes] = true }
+        parser.on('--root-dir PATH') { |v| opts[:root_directory] = v }
+        parser.on('--timeout SECONDS') { |v| opts[:timeout] = Integer(v) }
+        parser.on('--retention-days DAYS') { |v| opts[:retention_days] = Integer(v) }
+        parser.on('--minimum COUNT') { |v| opts[:minimum] = Integer(v) }
+        parser.on('--checkpoint MODE') { |v| opts[:checkpoint] = v }
         parser.on('--dry-run') do
           @options[:dry_run] = true
           @runner.dry_run = true
         end
       end.parse!(@argv)
       @config.validate!
-      wal = PostgreSQLWalArchive.new(config: @config, runner: @runner, logger: $stderr)
-      case action
-      when 'configure' then locked { wal.configure(verify: opts[:verify]) }
-      when 'verify' then locked { wal.verify }
-      when 'status' then wal.status(json: opts[:json])
-      else raise ValidationError, 'postgres wal-archive command must be configure, verify, or status'
+      wal = PostgreSQLWalArchive.new(config: @config, runner: @runner, logger: $stderr,
+                                     root_directory: opts[:root_directory])
+      case sub
+      when 'wal-archive'
+        case action
+        when 'enable', 'configure' then locked { wal.enable(verify: opts[:verify], yes: opts[:yes]) }
+        when 'disable' then locked { wal.disable(yes: opts[:yes]) }
+        when 'test', 'verify' then locked { wal.test(timeout: opts[:timeout] || PostgreSQLWalArchive::DEFAULT_TEST_TIMEOUT) }
+        when 'status' then wal.status(json: opts[:json])
+        else raise ValidationError, 'postgres wal-archive command must be enable, disable, status, or test'
+        end
+      when 'base-backup'
+        case action
+        when 'create' then locked { wal.create_base_backup(checkpoint: opts[:checkpoint], yes: opts[:yes]) }
+        when 'list' then wal.list_base_backups(json: opts[:json])
+        when 'prune'
+          locked do
+            wal.prune_base_backups(retention_days: opts[:retention_days], minimum: opts[:minimum],
+                                   dry_run: @runner.dry_run, yes: opts[:yes])
+          end
+        else raise ValidationError, 'postgres base-backup command must be create, list, or prune'
+        end
       end
     end
 
@@ -253,9 +276,13 @@ module MitsubachiInfra
           mitsubachi-infra https enable [--staging] [--dry-run]
           mitsubachi-infra https renew [--dry-run]
           mitsubachi-infra https status [--json]
-          mitsubachi-infra postgres wal-archive configure [--verify] [--dry-run]
-          mitsubachi-infra postgres wal-archive verify [--dry-run]
+          mitsubachi-infra postgres wal-archive enable [--verify] [--root-dir PATH] [--yes] [--dry-run]
+          mitsubachi-infra postgres wal-archive disable [--yes] [--dry-run]
           mitsubachi-infra postgres wal-archive status [--json]
+          mitsubachi-infra postgres wal-archive test [--timeout SECONDS] [--dry-run]
+          mitsubachi-infra postgres base-backup create [--checkpoint fast|spread] [--yes] [--dry-run]
+          mitsubachi-infra postgres base-backup list [--json]
+          mitsubachi-infra postgres base-backup prune [--retention-days DAYS] [--minimum COUNT] [--yes] [--dry-run]
       USAGE
     end
 
@@ -299,7 +326,7 @@ module MitsubachiInfra
 
     def root_required?(command, argv)
       return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test].include?(command)
-      return true if command == 'postgres' && argv.first == 'wal-archive'
+      return true if command == 'postgres' && %w[wal-archive base-backup].include?(argv.first)
       return false unless command == 'https'
 
       %w[enable renew].include?(argv.first || 'status')

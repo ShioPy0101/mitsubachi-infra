@@ -36,6 +36,32 @@ Codexは、開発用Ubuntuでファイルを変更しただけでリリース用
 
 また、リリース用Ubuntu上のファイルを直接編集することを通常の反映手段として提案しないこと。恒久的な変更は、原則としてこのリポジトリのコード、テンプレート、設定ファイル、またはデプロイ処理へ実装する。
 
+## Git作業ブランチの扱い
+
+Codexは、commitを作成する前に必ず現在のbranchとremote追跡状態を確認すること。
+
+```bash
+git status --short --branch
+git branch --show-current
+```
+
+`main` 上で作業している場合、利用者から明示的に許可されていない限り、直接commitしてはならない。先に用途が分かる作業branchを作成して切り替えること。
+
+```bash
+git switch -c feat/<topic>
+```
+
+誤って `main` にcommitした場合は、pushする前に次の順序で修正すること。
+
+```text
+1. 現在のHEADを作業branchへ退避する
+2. 退避branchにcommitが残っていることを確認する
+3. mainをorigin/mainへ戻す
+4. 作業branchへ戻って作業を続ける
+```
+
+この修正では、commitを失わないことを最優先する。`git reset --hard` を使う場合は、対象commitが別branchに退避済みであることを確認してから実行する。
+
 障害調査のためにリリース用Ubuntu上のファイルを一時的に編集する場合は、以下を明示すること。
 
 - 一時的な調査変更であること

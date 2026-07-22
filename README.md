@@ -1055,20 +1055,23 @@ production DB へ restore する場合は、対象 DB を誤って上書きし�
 WAL アーカイブは `pg_wal` をバックアップ先として扱わず、PostgreSQL の `archive_command` で外付け HDD へ保存します。保存先は標準で次です。
 
 ```text
-/mnt/external-hdd/mitsubachi/backups/wal
+/mnt/external-hdd/mitsubachi/postgresql/
+├── wal-archive/
+├── base-backups/
+└── scripts/
 ```
 
 設定:
 
 ```bash
-sudo mitsubachi-infra postgres wal-archive configure
+sudo mitsubachi-infra postgres wal-archive enable
 ```
 
 強制 WAL 切り替えまで含めた検証:
 
 ```bash
-sudo mitsubachi-infra postgres wal-archive configure --verify
-sudo mitsubachi-infra postgres wal-archive verify
+sudo mitsubachi-infra postgres wal-archive enable --verify
+sudo mitsubachi-infra postgres wal-archive test
 ```
 
 状態確認:
@@ -1078,30 +1081,45 @@ sudo mitsubachi-infra postgres wal-archive status
 sudo mitsubachi-infra postgres wal-archive status --json
 ```
 
+ベースバックアップ:
+
+```bash
+sudo mitsubachi-infra postgres base-backup create
+sudo mitsubachi-infra postgres base-backup list
+sudo mitsubachi-infra postgres base-backup prune --dry-run
+```
+
 設定値は `/etc/mitsubachi/config.yml` の `postgresql.wal_archive` で管理します。PostgreSQL の version / cluster は通常自動検出します。稼働中クラスタが複数ある場合は勝手に選ばず停止するため、必要に応じて `version` と `cluster` を明示してください。
 
 ```yaml
 postgresql:
   wal_archive:
     mount_point: /mnt/external-hdd
-    archive_directory: /mnt/external-hdd/mitsubachi/backups/wal
-    archive_script: /usr/local/libexec/mitsubachi/archive-wal
-    config_filename: 90-mitsubachi-wal-archive.conf
+    root_directory: /mnt/external-hdd/mitsubachi/postgresql
+    archive_directory: /mnt/external-hdd/mitsubachi/postgresql/wal-archive
+    base_backup_directory: /mnt/external-hdd/mitsubachi/postgresql/base-backups
+    scripts_directory: /mnt/external-hdd/mitsubachi/postgresql/scripts
+    archive_script: /usr/local/lib/mitsubachi-infra/postgresql/archive-wal
     version:
     cluster:
-    archive_timeout:
+    archive_timeout: 300s
+    base_backup_retention_days: 30
+    minimum_base_backups: 2
 ```
 
-実装は `/mnt/external-hdd` が実際の mount point であることを `findmnt --mountpoint` で確認してから進みます。外付け HDD が外れた状態で root filesystem 配下へ誤保存しないよう、`archive-wal` スクリプトも実行ごとに `mountpoint -q /mnt/external-hdd` を確認します。
+`--root-dir PATH` で保存ルートを一時的に上書きできます。DB本体とバックアップ先が同じ物理ディスクにある場合、これはディスク故障対策になりません。別ディスク、NAS、またはoffsite backupへ複製してください。
+
+実装は `/mnt/external-hdd` が実際の mount point であることを `findmnt --target` で確認してから進みます。外付け HDD が外れた状態で root filesystem 配下へ誤保存しないよう、`archive-wal` スクリプトも実行ごとに `mountpoint -q /mnt/external-hdd` を確認します。
 
 現在の PostgreSQL 設定確認:
 
 ```bash
 cd /tmp
 sudo -u postgres psql -Atc "SHOW data_directory;"
+sudo -u postgres psql -Atc "SHOW wal_level;"
 sudo -u postgres psql -Atc "SHOW archive_mode;"
 sudo -u postgres psql -Atc "SHOW archive_command;"
-sudo -u postgres psql -Atc "SHOW archive_library;"
+sudo -u postgres psql -Atc "SHOW archive_timeout;"
 ```
 
 `postgres` ユーザーが入れない作業ディレクトリから実行すると `could not change directory` 警告が出るため、`cd /tmp` してから確認します。
@@ -1116,7 +1134,8 @@ SELECT
   last_archived_wal,
   last_archived_time,
   last_failed_wal,
-  last_failed_time
+  last_failed_time,
+  stats_reset
 FROM pg_stat_archiver;
 "
 ```
@@ -1124,11 +1143,7 @@ FROM pg_stat_archiver;
 手動テスト:
 
 ```bash
-sudo -u postgres psql -c "SELECT pg_switch_wal();"
-sudo find /mnt/external-hdd/mitsubachi/backups/wal \
-  -maxdepth 1 \
-  -type f \
-  -printf '%f %s bytes\n'
+sudo mitsubachi-infra postgres wal-archive test --timeout 60
 ```
 
 重要な制約:
@@ -1136,10 +1151,14 @@ sudo find /mnt/external-hdd/mitsubachi/backups/wal \
 ```text
 - WAL アーカイブだけでは復旧できない。
 - PITR には定期的なベースバックアップが別途必要。
+- base-backup create は pg_basebackup を使い、manifest を生成し、pg_verifybackup が利用可能なら検証する。
 - 外付け HDD が外れると WAL アーカイブは失敗し、失敗が続くと pg_wal が肥大化する。
+- status は空き容量10%未満を WARNING、5%未満を ERROR として扱う。
 - WAL を日数だけで自動削除してはいけない。
-- find /mnt/external-hdd/mitsubachi/backups/wal -mtime +7 -delete のような削除は禁止。
-- 保存期限管理は pgBackRest や Barman の導入で扱う。
+- find /mnt/external-hdd/mitsubachi/postgresql/wal-archive -mtime +7 -delete のような削除は禁止。
+- prune はベースバックアップのみを保持日数と最低世代数で削除し、WAL は削除候補表示に留める。
+- WAL アーカイブに含まれるのは DB 変更だけ。PostgreSQL 設定ファイル、Rails env、アプリケーションの upload/file storage は別途 backup が必要。
+- 復元手順はこの変更では自動化しない。別環境で定期的な復元訓練を行う。
 ```
 
 storage restore 例:

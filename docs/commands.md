@@ -121,25 +121,35 @@ PostgreSQL の WAL アーカイブを外付け HDD へ保存する設定です�
 postgresql:
   wal_archive:
     mount_point: /mnt/external-hdd
-    archive_directory: /mnt/external-hdd/mitsubachi/backups/wal
-    archive_script: /usr/local/libexec/mitsubachi/archive-wal
-    config_filename: 90-mitsubachi-wal-archive.conf
+    root_directory: /mnt/external-hdd/mitsubachi/postgresql
+    archive_directory: /mnt/external-hdd/mitsubachi/postgresql/wal-archive
+    base_backup_directory: /mnt/external-hdd/mitsubachi/postgresql/base-backups
+    scripts_directory: /mnt/external-hdd/mitsubachi/postgresql/scripts
+    archive_script: /usr/local/lib/mitsubachi-infra/postgresql/archive-wal
     version:
     cluster:
-    archive_timeout:
+    archive_timeout: 300s
+    base_backup_retention_days: 30
+    minimum_base_backups: 2
 ```
 
 ```bash
-sudo mitsubachi-infra postgres wal-archive configure
-sudo mitsubachi-infra postgres wal-archive configure --verify
-sudo mitsubachi-infra postgres wal-archive verify
+sudo mitsubachi-infra postgres wal-archive enable
+sudo mitsubachi-infra postgres wal-archive enable --verify
+sudo mitsubachi-infra postgres wal-archive test
 sudo mitsubachi-infra postgres wal-archive status
 sudo mitsubachi-infra postgres wal-archive status --json
+sudo mitsubachi-infra postgres wal-archive disable
+sudo mitsubachi-infra postgres base-backup create
+sudo mitsubachi-infra postgres base-backup list
+sudo mitsubachi-infra postgres base-backup prune --dry-run
 ```
 
-`configure` は `/mnt/external-hdd` が mount point であることを確認してから、`postgres:postgres 0700` の保存先、`/usr/local/libexec/mitsubachi/archive-wal`、PostgreSQL の `conf.d/90-mitsubachi-wal-archive.conf` を冪等に配置します。2回目以降、設定と runtime が期待値なら PostgreSQL を再起動しません。
+`enable` は `/mnt/external-hdd` が mount point であることを確認してから、`postgres:postgres 0700` の保存先、root所有の `/usr/local/lib/mitsubachi-infra/postgresql/archive-wal` を冪等に配置し、`ALTER SYSTEM SET` で `wal_level=replica`、`archive_mode=on`、`archive_command`、`archive_timeout=300s` を設定します。`wal_level` または `archive_mode` が変わる場合は `pg_ctlcluster <version> <cluster> restart` を実行します。
 
-WAL アーカイブだけでは復旧できません。PITR にはベースバックアップが必要です。WAL を日数だけで削除する運用は禁止し、保存期限管理は pgBackRest / Barman などのバックアップツールで扱います。
+WAL アーカイブだけでは復旧できません。PITR にはベースバックアップが必要です。`base-backup create` は `pg_basebackup --wal-method=stream --manifest-checksums=SHA256` を使い、`.partial` ディレクトリから成功時だけ正式名へ rename します。`prune` は保持対象外のベースバックアップだけを削除し、WAL は自動削除しません。保持中の最古ベースバックアップに必要なWALを誤削除しないためです。
+
+同じ物理ディスクへ保存したバックアップは、DB本体ディスクの故障対策になりません。別ディスク、NAS、またはoffsite backupへ複製してください。
 
 ## dry-run
 

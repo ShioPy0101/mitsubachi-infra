@@ -72,12 +72,16 @@ module MitsubachiInfra
       'postgresql' => {
         'wal_archive' => {
           'mount_point' => '/mnt/external-hdd',
-          'archive_directory' => '/mnt/external-hdd/mitsubachi/backups/wal',
-          'archive_script' => '/usr/local/libexec/mitsubachi/archive-wal',
-          'config_filename' => '90-mitsubachi-wal-archive.conf',
+          'root_directory' => '/mnt/external-hdd/mitsubachi/postgresql',
+          'archive_directory' => '/mnt/external-hdd/mitsubachi/postgresql/wal-archive',
+          'base_backup_directory' => '/mnt/external-hdd/mitsubachi/postgresql/base-backups',
+          'scripts_directory' => '/mnt/external-hdd/mitsubachi/postgresql/scripts',
+          'archive_script' => '/usr/local/lib/mitsubachi-infra/postgresql/archive-wal',
           'version' => nil,
           'cluster' => nil,
-          'archive_timeout' => nil
+          'archive_timeout' => '300s',
+          'base_backup_retention_days' => 30,
+          'minimum_base_backups' => 2
         }
       }
     }.freeze
@@ -273,26 +277,31 @@ module MitsubachiInfra
 
     def validate_postgresql!
       wal = data.fetch('postgresql').fetch('wal_archive')
-      %w[mount_point archive_directory archive_script config_filename].each do |key|
+      %w[mount_point root_directory archive_directory base_backup_directory scripts_directory archive_script].each do |key|
         present!(wal[key], "postgresql.wal_archive.#{key}")
       end
-      %w[mount_point archive_directory archive_script].each do |key|
+      %w[mount_point root_directory archive_directory base_backup_directory scripts_directory archive_script].each do |key|
         value = wal.fetch(key).to_s
         raise ValidationError, "postgresql.wal_archive.#{key} must be absolute" unless value.start_with?('/')
 
         reject_traversal!(value, "postgresql.wal_archive.#{key}")
       end
-      archive_dir = wal.fetch('archive_directory').to_s
+      root_dir = wal.fetch('root_directory').to_s
       mount_point = wal.fetch('mount_point').to_s
-      unless archive_dir == mount_point || archive_dir.start_with?("#{mount_point}/")
-        raise ValidationError, 'postgresql.wal_archive.archive_directory must be under mount_point'
+      unless root_dir == mount_point || root_dir.start_with?("#{mount_point}/")
+        raise ValidationError, 'postgresql.wal_archive.root_directory must be under mount_point'
       end
-      filename = wal.fetch('config_filename').to_s
-      raise ValidationError, 'postgresql.wal_archive.config_filename must end with .conf' unless filename.end_with?('.conf')
-      raise ValidationError, 'postgresql.wal_archive.config_filename must be a basename' if filename.include?('/')
+      %w[archive_directory base_backup_directory scripts_directory].each do |key|
+        value = wal.fetch(key).to_s
+        unless value == root_dir || value.start_with?("#{root_dir}/")
+          raise ValidationError, "postgresql.wal_archive.#{key} must be under root_directory"
+        end
+      end
       if wal['archive_timeout'] && !wal['archive_timeout'].to_s.match?(/\A\d+[smh]?\z/)
         raise ValidationError, 'postgresql.wal_archive.archive_timeout must be a PostgreSQL duration like 300s'
       end
+      positive_integer!(wal['base_backup_retention_days'], 'postgresql.wal_archive.base_backup_retention_days')
+      positive_integer!(wal['minimum_base_backups'], 'postgresql.wal_archive.minimum_base_backups')
     end
 
     def validate_production_schema!
