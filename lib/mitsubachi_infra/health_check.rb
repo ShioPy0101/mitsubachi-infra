@@ -83,7 +83,10 @@ module MitsubachiInfra
       return true unless expected_json
 
       parsed = JSON.parse(response[:body])
-      expected_json.all? { |key, value| parsed[key.to_s] == value }
+      expected_json.all? do |key, value|
+        expected_values = value.is_a?(Array) ? value : [value]
+        expected_values.include?(parsed[key.to_s])
+      end
     rescue JSON::ParserError
       false
     end

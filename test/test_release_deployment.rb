@@ -367,16 +367,23 @@ class ReleaseDeploymentTest < Minitest::Test
         MitsubachiInfra::HealthCheck.new(logger: logger)
                                         .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
                                                                                          attempts: 1, delay: 0,
-                                                                                         expected_json: { status: 'ready' })
+                                                                                         expected_json: { status: %w[ready ok] })
       end
     end
     with_http_response(200, '{"status":"ready"}') do
       result = MitsubachiInfra::HealthCheck.new(logger: logger)
                                            .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
                                                                                             attempts: 1, delay: 0,
-                                                                                            expected_json: { status: 'ready' })
+                                                                                            expected_json: { status: %w[ready ok] })
       assert result.succeeded
       assert_includes logger.string, '[OK] health check passed'
+    end
+    with_http_response(200, '{"status":"ok"}') do
+      result = MitsubachiInfra::HealthCheck.new(logger: logger)
+                                           .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
+                                                                                            attempts: 1, delay: 0,
+                                                                                            expected_json: { status: %w[ready ok] })
+      assert result.succeeded
     end
   end
 
