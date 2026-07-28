@@ -71,11 +71,7 @@ server {
         if ($remote_addr = ::1) { set $mitsubachi_maintenance ""; }
         if ($mitsubachi_maintenance = enabled) { return 503; }
         add_header Cache-Control "no-cache";
-        try_files $uri $uri/ @frontend_spa;
-    }
-
-    location @frontend_spa {
-        add_header Cache-Control "no-cache";
-        rewrite ^ /index.html last;
+        error_page 404 =200 /index.html;
+        try_files $uri $uri/ =404;
     }
 }
