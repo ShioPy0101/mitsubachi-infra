@@ -58,9 +58,10 @@ run_expect_success "backup postgres legacy help" bash "${ROOT}/scripts/backup_po
 grep -F 'EnvironmentFile=<%= @config.fetch("paths").fetch("rails_env") %>' "${ROOT}/templates/systemd/mitsubachi-api.service.erb" >/dev/null || fail "systemd template reads rails env"
 grep -F 'bundle exec bin/jobs' "${ROOT}/templates/systemd/mitsubachi-jobs.service.erb" >/dev/null || fail "worker systemd template runs bin/jobs"
 grep -F 'proxy_pass http://127.0.0.1:<%= config.fetch("ports").fetch("rails") %>;' "${ROOT}/templates/nginx/public_https.conf.erb" >/dev/null || fail "Nginx proxies API to localhost Rails"
-grep -F 'try_files $uri $uri/ /index.html;' "${ROOT}/templates/nginx/public_https.conf.erb" >/dev/null || fail "Nginx public template has SPA fallback"
+grep -F 'try_files $uri $uri/ @frontend_spa;' "${ROOT}/templates/nginx/public_https.conf.erb" >/dev/null || fail "Nginx public template routes deep links to SPA fallback"
+grep -F 'rewrite ^ /index.html last;' "${ROOT}/templates/nginx/public_https.conf.erb" >/dev/null || fail "Nginx public SPA fallback internally redirects to index"
 # shellcheck disable=SC2016
-grep -F 'try_files $uri $uri/ /index.html;' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan template has SPA fallback"
+grep -F 'try_files $uri $uri/ @frontend_spa;' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan template routes deep links to SPA fallback"
 grep -F 'location /api/' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan keeps api proxy"
 grep -F 'certbot' "${ROOT}/lib/mitsubachi_infra/certbot.rb" >/dev/null || fail "certbot integration exists"
 grep -F 'Open3.capture3' "${ROOT}/lib/mitsubachi_infra/command_runner.rb" >/dev/null || fail "CommandRunner uses Open3"
