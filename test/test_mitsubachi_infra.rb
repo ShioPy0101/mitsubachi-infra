@@ -2462,6 +2462,21 @@ class MitsubachiInfraTest < Minitest::Test
     assert_equal 'mitsubachi-api.shiosalt.com', health.calls[2][1][:host]
   end
 
+  def test_Certbotのstatus表示もlocalhostへHost付きで接続する
+    config = production_config('/tmp/mitsubachi-test')
+    runner = HttpsRunner.new
+    certbot = certbot_for(config, runner: runner)
+
+    assert certbot.send(:local_api_health_result, 'live')
+
+    command = runner.commands.last
+    assert_equal %w[curl -fsS -o /dev/null -H], command[0, 5]
+    assert_equal 'Host: mitsubachi-api.shiosalt.com', command[5]
+    assert_equal 'http://127.0.0.1:3000/api/health/live', command[6]
+    refute command.any? { |part| part.include?('http://mitsubachi-api.shiosalt.com') }
+    refute command.any? { |part| part.include?('https://mitsubachi-api.shiosalt.com') }
+  end
+
   def test_health_check_sends_public_host_header
     request = capture_health_request do |url|
       MitsubachiInfra::HealthCheck.new(logger: StringIO.new).check!(url, host: 'mitsubachi-api.shiosalt.com')

@@ -237,8 +237,8 @@ module MitsubachiInfra
         nginx_config: @nginx.test_result.success?,
         nginx_service: @runner.run('systemctl', 'is-active', 'nginx', allow_failure: true).stdout.strip,
         certbot_timer: timer_status,
-        http_health: include_health ? health_result("http://#{@config.api_host}#{@config.fetch('backend').fetch('health_path')}/live") : nil,
-        https_health: include_health ? health_result("https://#{@config.api_host}#{@config.fetch('backend').fetch('health_path')}/ready") : nil
+        local_live_health: include_health ? local_api_health_result('live') : nil,
+        local_ready_health: include_health ? local_api_health_result('ready') : nil
       }
     end
 
@@ -271,8 +271,10 @@ module MitsubachiInfra
       }
     end
 
-    def health_result(url)
-      @runner.run('curl', '-fsSIL', url, allow_failure: true).success?
+    def local_api_health_result(state)
+      url = "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/#{state}"
+      @runner.run('curl', '-fsS', '-o', '/dev/null', '-H', "Host: #{@config.api_host}", url,
+                  allow_failure: true).success?
     end
 
     def print_status(data, json:)
