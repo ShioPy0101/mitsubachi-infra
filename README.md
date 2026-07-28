@@ -922,7 +922,7 @@ sudo mitsubachi-infra deploy release \
   --dry-run
 ```
 
-実工程はpreflight、release ID発行、単一deploy lock、maintenance enable、`pg_dump`、migration前snapshot、backend/frontend準備、migration、移行検証、両current切り替え、API/worker再起動、Nginx reload、readiness、production smoke/新API/権限/廃止route検証、report確定、maintenance disableの順です。migration前snapshot taskは現在稼働中backendから実行するため、統合リリースの初回利用前にそのtaskをbackendへ先行リリースしておく必要があります。
+実工程はpreflight、release ID発行、単一deploy lock、maintenance enable、`pg_dump`、DBを変更しないbackend/frontend準備、migration前snapshot、migration、移行検証、スモーク用短寿命認証の発行、両current切り替え、API/worker再起動、Nginx reload、readiness、production smoke/新API/権限/廃止route検証、report確定、maintenance disableの順です。snapshot taskは準備済みの新backend releaseからmigration前に実行するため、初回導入のための先行backend deployは不要です。
 
 成果物は`release.backup_root`（既定`/var/backups/mitsubachi/releases/<release-id>/`）に保存します。
 
@@ -946,13 +946,16 @@ release.json
 ```bash
 bin/rails deployment:pre_migration_snapshot OUTPUT=/path/pre_migration_counts.json
 bin/rails deployment:verify_migration OUTPUT=/path/migration_report.json
+bin/rails deployment:prepare_smoke_test_credentials OUTPUT=/path/smoke-test-credentials.json
 ```
 
 検証JSONは最低限`valid: true`を含め、未移行、重複、不整合を表す件数は0にします。infraは`without`、`unmigrated`、`duplicate`、`mismatch`、`invalid`、`orphan`を含むカウンターが非0なら失敗と判定します。
 
-frontendのcurrent releaseには、`release.smoke_test.command`（既定`npm run smoke:production`）が必要です。Playwright等でmember、organization_admin、system_adminのログイン、Drive、Trash、管理画面、Organization切り替えと保持、権限制御、新API、主要画面を検証し、`OUTPUT`へ`{"succeeded":true}`を含むJSONを出してください。`RELEASE_ID`、`OUTPUT`、`CREDENTIALS_FILE`、`BASE_URL`、`API_BASE_URL`、`FRONTEND_HOST`、`API_HOST`が渡されます。
+新backendには`release.smoke_test.credentials_task`（既定`deployment:prepare_smoke_test_credentials`）も必要です。統合リリースはmigration検証後にこのtaskを実行し、三権限の専用ユーザーと15分有効・一度限りのログイントークンを含むmode `0600`のJSONを生成します。資格情報はrelease reportへ記録せず、スモーク終了時および失敗終了時に削除します。そのため、統合リリースで`/etc/mitsubachi/smoke-test.env`へ固定パスワードを手入力する必要はありません。
 
-本番テスト認証情報は`release.smoke_test.credentials_file`（既定`/etc/mitsubachi/smoke-test.env`）へroot専用mode`0600`で置きます。内容はログやreportへコピーされません。廃止API/画面は`release.smoke_test.removed_manifest`から読みます。[例](env/removed-routes.yml.example)の期待statusと完全一致する必要があり、200、redirect、401、403は404の代わりとして認めません。localhostからのsmokeだけはmaintenanceを迂回し、通常の外部frontend/APIは503になります。readinessはmaintenance中も利用可能です。
+frontendの新releaseには、`release.smoke_test.command`（既定`npm run smoke:production`）が必要です。member、organization_admin、system_adminのログイン、Drive、Trash、管理画面、Organization切り替え、権限制御、新API、主要画面を検証し、`OUTPUT`へ`{"succeeded":true}`を含むJSONを出してください。`RELEASE_ID`、`OUTPUT`、`CREDENTIALS_FILE`、`BASE_URL`、`API_BASE_URL`、`FRONTEND_HOST`、`API_HOST`が渡されます。
+
+`release.smoke_test.credentials_file`（既定`/etc/mitsubachi/smoke-test.env`）は単独の`smoke-test production`を手動実行する場合の互換用です。統合リリースではbackend taskの一時JSONを優先します。内容はログやreportへコピーされません。廃止API/画面は`release.smoke_test.removed_manifest`から読みます。[例](env/removed-routes.yml.example)の期待statusと完全一致する必要があり、200、redirect、401、403は404の代わりとして認めません。localhostからのsmokeだけはmaintenanceを迂回し、通常の外部frontend/APIは503になります。readinessはmaintenance中も利用可能です。
 
 ### health checkと診断
 

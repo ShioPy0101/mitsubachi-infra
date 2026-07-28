@@ -82,6 +82,7 @@ module MitsubachiInfra
 
       def execute_locked(report, backend_ref:, frontend_ref:)
         state = { migration_started: false, switched: false, previous_backend: nil, previous_frontend: nil }
+        smoke_credentials = nil
         begin
           run_step(report, 'maintenance_enable') do
             @maintenance.enable
@@ -93,13 +94,6 @@ module MitsubachiInfra
           end
           backend_release = nil
           frontend_release = nil
-          run_step(report, 'pre_migration_snapshot') do
-            snapshot_release = current_release(backend_root)
-            raise Error, 'current backend release is required for pre-migration snapshot task' unless snapshot_release
-
-            output = report.path('pre_migration_counts.json')
-            @migration.snapshot!(release: snapshot_release, output: output)
-          end
           run_step(report, 'backend_prepare') do
             backend_release, revision = prepare_backend(report.data.fetch(:release_id), backend_ref)
             report.assign(backend_revision: revision)
@@ -107,6 +101,10 @@ module MitsubachiInfra
           run_step(report, 'frontend_prepare') do
             frontend_release, revision = prepare_frontend(report.data.fetch(:release_id), frontend_ref)
             report.assign(frontend_revision: revision)
+          end
+          run_step(report, 'pre_migration_snapshot') do
+            output = report.path('pre_migration_counts.json')
+            @migration.snapshot!(release: backend_release, output: output)
           end
           state[:migration_started] = true
           run_step(report, 'database_migration') do
@@ -117,6 +115,11 @@ module MitsubachiInfra
             path = report.path('migration_report.json')
             @migration.verify!(release: backend_release, output: path)
             report.merge(:migration, verification_succeeded: true, report_path: path)
+          end
+          run_step(report, 'smoke_credentials') do
+            smoke_credentials = report.path('.smoke-test-credentials.json')
+            task = release_config.fetch('smoke_test').fetch('credentials_task')
+            @migration.prepare_smoke_credentials!(release: backend_release, output: smoke_credentials, task: task)
           end
           run_step(report, 'release_switch') do
             state[:previous_backend] = current_release(backend_root)
@@ -136,7 +139,8 @@ module MitsubachiInfra
           end
           run_step(report, 'smoke_test') do
             path = report.path('smoke_test_report.json')
-            @smoke_tester.run!(release_id: report.data.fetch(:release_id), output: path)
+            @smoke_tester.run!(release_id: report.data.fetch(:release_id), output: path,
+                               credentials_file: smoke_credentials, delete_credentials: true)
             report.merge(:smoke_test, succeeded: true, report_path: path)
           end
           run_step(report, 'maintenance_disable') do
@@ -154,6 +158,8 @@ module MitsubachiInfra
           report.finish(status: 'failed', failed_step: failed_step, error: error.message,
                         exit_code: error.respond_to?(:status) ? error.status : 1)
           raise
+        ensure
+          FileUtils.rm_f(smoke_credentials) if smoke_credentials
         end
       end
 
@@ -317,8 +323,8 @@ module MitsubachiInfra
       end
 
       def planned_steps
-        %w[maintenance_enable database_backup pre_migration_snapshot backend_prepare frontend_prepare
-           database_migration migration_verification release_switch service_restart nginx_reload
+        %w[maintenance_enable database_backup backend_prepare frontend_prepare pre_migration_snapshot
+           database_migration migration_verification smoke_credentials release_switch service_restart nginx_reload
            readiness_health_check smoke_test maintenance_disable]
       end
 

@@ -56,6 +56,7 @@ module MitsubachiInfra
         'worker_service' => 'mitsubachi-worker.service',
         'smoke_test' => {
           'command' => %w[npm run smoke:production],
+          'credentials_task' => 'deployment:prepare_smoke_test_credentials',
           'credentials_file' => '/etc/mitsubachi/smoke-test.env',
           'removed_manifest' => '/etc/mitsubachi/removed-routes.yml',
           'timeout_seconds' => 900
@@ -302,6 +303,7 @@ module MitsubachiInfra
       unless smoke['command'].is_a?(Array) && smoke['command'].any? && smoke['command'].all? { |part| !part.to_s.empty? }
         raise ValidationError, 'release.smoke_test.command must be a non-empty argv array'
       end
+      present!(smoke['credentials_task'], 'release.smoke_test.credentials_task')
       %w[credentials_file removed_manifest].each do |key|
         value = smoke.fetch(key).to_s
         raise ValidationError, "release.smoke_test.#{key} must be absolute" unless value.start_with?('/')

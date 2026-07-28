@@ -36,18 +36,26 @@ module MitsubachiInfra
         report
       end
 
+      def prepare_smoke_credentials!(release:, output:, task:)
+        task!(task, release: release, output: output)
+        report = parse_json!(output, mode: 0o600)
+        raise Error, 'smoke credential task generated no users' unless report['users'].is_a?(Hash) && report['users'].any?
+
+        report
+      end
+
       private
 
       def task!(name, release:, output:)
         @rails_command.rails(name, release: release, timeout: 1800, env: { 'OUTPUT' => output })
       end
 
-      def parse_json!(path)
+      def parse_json!(path, mode: 0o640)
         return {} if @runner.dry_run
         raise Error, "deployment task did not create JSON: #{path}" unless File.file?(path)
 
         parsed = JSON.parse(File.read(path))
-        File.chmod(0o640, path)
+        File.chmod(mode, path)
         parsed
       rescue JSON::ParserError => e
         raise Error, "deployment task generated invalid JSON: #{path}: #{e.message}"

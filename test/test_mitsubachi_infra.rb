@@ -2965,7 +2965,7 @@ class MitsubachiInfraTest < Minitest::Test
       manifest = config.fetch('release').fetch('smoke_test').fetch('removed_manifest')
       assert_path_exists credentials
       assert_equal 0o600, File.stat(credentials).mode & 0o777
-      assert_includes File.read(credentials), 'KEY=value'
+      assert_includes File.read(credentials), 'MEMBER_TOKEN='
       assert_path_exists manifest
       assert_equal "removed_endpoints: []\nremoved_pages: []\n", File.read(manifest)
     end

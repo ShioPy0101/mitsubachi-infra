@@ -29,22 +29,14 @@ module MitsubachiInfra
         resolve_ref(@config.fetch('frontend').fetch('repository'), frontend_ref)
         smoke = @config.fetch('release').fetch('smoke_test')
         raise ValidationError, 'release.smoke_test.command is required' unless smoke['command'].is_a?(Array) && smoke['command'].any?
-        credentials = smoke.fetch('credentials_file')
-        if !File.file?(credentials) || (File.stat(credentials).mode & 0o077) != 0
-          raise Error, "smoke-test credentials must exist and not be group/world accessible: #{credentials}"
-        end
-        unless credentials_configured?(credentials)
-          message = "smoke-test credentials have no KEY=value entries: #{credentials}"
-          raise Error, message unless dry_run
-
-          @logger.puts("[PREFLIGHT] warning: #{message}")
-        end
+        raise ValidationError, 'release.smoke_test.credentials_task is required' if smoke.fetch('credentials_task').to_s.empty?
         manifest = smoke.fetch('removed_manifest')
         raise Error, "removed-routes manifest is missing: #{manifest}" unless File.file?(manifest)
 
         @logger.puts("[PREFLIGHT] health URL=#{health_url} Host=#{@config.health_host}")
         @logger.puts("[PREFLIGHT] maintenance flag=#{@config.fetch('release').fetch('maintenance_flag')}")
         @logger.puts("[PREFLIGHT] smoke manifest=#{smoke.fetch('removed_manifest')}")
+        @logger.puts("[PREFLIGHT] smoke credentials task=#{smoke.fetch('credentials_task')}")
         true
       end
 
@@ -90,13 +82,6 @@ module MitsubachiInfra
         candidate = File.expand_path(path)
         candidate = File.dirname(candidate) until File.exist?(candidate) || candidate == File.dirname(candidate)
         candidate
-      end
-
-      def credentials_configured?(path)
-        File.readlines(path, chomp: true).any? do |line|
-          stripped = line.strip
-          !stripped.empty? && !stripped.start_with?('#') && stripped.match?(/\A[A-Za-z_][A-Za-z0-9_]*=.+\z/)
-        end
       end
 
       def check_nginx!

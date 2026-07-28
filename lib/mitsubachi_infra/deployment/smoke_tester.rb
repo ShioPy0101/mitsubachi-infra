@@ -17,9 +17,9 @@ module MitsubachiInfra
         @logger = logger
       end
 
-      def run!(release_id:, output:)
+      def run!(release_id:, output:, credentials_file: nil, delete_credentials: false)
         settings = @config.fetch('release').fetch('smoke_test')
-        source_credentials = settings.fetch('credentials_file')
+        source_credentials = credentials_file || settings.fetch('credentials_file')
         validate_credentials!(source_credentials) unless @runner.dry_run
         runtime_credentials = @runner.dry_run ? source_credentials : materialize_runtime_credentials(source_credentials,
                                                                                                       output)
@@ -52,6 +52,7 @@ module MitsubachiInfra
         report
       ensure
         FileUtils.rm_f(runtime_credentials) if defined?(runtime_credentials) && runtime_credentials != source_credentials
+        FileUtils.rm_f(source_credentials) if delete_credentials && defined?(source_credentials)
       end
 
       private
