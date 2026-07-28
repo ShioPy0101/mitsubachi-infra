@@ -220,11 +220,11 @@ module MitsubachiInfra
     end
 
     def https_health_check
-      @health.check!("https://#{@config.frontend_host}/", dry_run: @runner.dry_run)
-      @health.check!("https://#{@config.api_host}#{@config.fetch('backend').fetch('health_path')}/live",
-                     dry_run: @runner.dry_run)
-      @health.check!("https://#{@config.api_host}#{@config.fetch('backend').fetch('health_path')}/ready",
-                     dry_run: @runner.dry_run)
+      @health.check!('http://127.0.0.1/', host: @config.frontend_host, dry_run: @runner.dry_run)
+      %w[live ready].each do |state|
+        @health.check!("http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/#{state}",
+                       host: @config.api_host, dry_run: @runner.dry_run)
+      end
     end
 
     def status_data(include_health: true)
