@@ -4,6 +4,7 @@ require 'json'
 require 'etc'
 require 'fileutils'
 require 'net/http'
+require 'openssl'
 require 'uri'
 require 'yaml'
 require_relative '../errors'
@@ -27,8 +28,10 @@ module MitsubachiInfra
           'RELEASE_ID' => release_id,
           'OUTPUT' => output,
           'CREDENTIALS_FILE' => runtime_credentials,
-          'BASE_URL' => internal_frontend_url,
-          'API_BASE_URL' => internal_api_url,
+          'BASE_URL' => public_frontend_url,
+          'API_BASE_URL' => public_api_url,
+          'RAILS_READINESS_URL' => rails_readiness_url,
+          'SMOKE_RESOLVED_ADDRESS' => '127.0.0.1',
           'FRONTEND_HOST' => @config.frontend_host,
           'API_HOST' => @config.health_host
         }
@@ -98,12 +101,15 @@ module MitsubachiInfra
       def check_route(entry, api:)
         method = entry.fetch('method', 'GET').upcase
         expected = Integer(entry.fetch('expected_status', 404))
-        base = api ? internal_api_url : internal_frontend_url
+        base = api ? public_api_url : public_frontend_url
         uri = URI.join(base, entry.fetch('path'))
         request_class = Net::HTTP.const_get(method.capitalize)
         request = request_class.new(uri.request_uri)
-        request['Host'] = api ? @config.health_host : frontend_host
-        response = Net::HTTP.start(uri.host, uri.port, open_timeout: 5, read_timeout: 10) { |http| http.request(request) }
+        request['Host'] = uri.host
+        options = { use_ssl: uri.scheme == 'https', open_timeout: 5, read_timeout: 10 }
+        options[:ipaddr] = '127.0.0.1' if @config.public?
+        options[:verify_mode] = OpenSSL::SSL::VERIFY_PEER if options[:use_ssl]
+        response = Net::HTTP.start(uri.host, uri.port, **options) { |connection| connection.request(request) }
         actual = response.code.to_i
         raise Error, "removed route #{method} #{entry.fetch('path')} returned #{actual}, expected #{expected}" unless actual == expected
         raise Error, "removed route redirected: #{entry.fetch('path')}" if response.is_a?(Net::HTTPRedirection)
@@ -111,12 +117,16 @@ module MitsubachiInfra
         { method: method, path: entry.fetch('path'), expected_status: expected, actual_status: actual, passed: true }
       end
 
-      def internal_frontend_url
-        'http://127.0.0.1/'
+      def public_frontend_url
+        @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
       end
 
-      def internal_api_url
-        "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}/"
+      def public_api_url
+        @config.public? ? "https://#{@config.health_host}/" : "http://#{@config.fetch('server_ip')}/"
+      end
+
+      def rails_readiness_url
+        "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}#{@config.fetch('backend').fetch('health_path')}/ready"
       end
 
       def frontend_host
