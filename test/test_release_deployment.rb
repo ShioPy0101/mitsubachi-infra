@@ -99,6 +99,12 @@ class ReleaseDeploymentTest < Minitest::Test
       { 'valid' => true }
     end
 
+    def prepare_smoke_credentials!(release:, output:, task:)
+      call(:prepare_smoke_credentials)
+      File.write(output, JSON.generate(users: { member: { token: 'secret' } }))
+      { 'users' => { 'member' => { 'token' => 'secret' } } }
+    end
+
     private
 
     def call(name)
@@ -136,7 +142,7 @@ class ReleaseDeploymentTest < Minitest::Test
       @fail = fail
     end
 
-    def run!(release_id:, output:)
+    def run!(release_id:, output:, **_options)
       raise MitsubachiInfra::Error, 'smoke failed' if @fail
 
       File.write(output, JSON.generate(succeeded: true))
@@ -297,13 +303,27 @@ class ReleaseDeploymentTest < Minitest::Test
     assert_equal 'old', File.basename(File.realpath(File.join(@backend, 'current')))
   end
 
+  def test_smoke認証情報生成失敗時は切り替えずメンテナンスを維持する
+    migration = Migration.new(fail_at: :prepare_smoke_credentials)
+    release, = build_release(migration: migration)
+
+    assert_raises(MitsubachiInfra::Error) { deploy(release) }
+    assert_equal 'old', File.basename(File.realpath(File.join(@backend, 'current')))
+    assert_equal 'old', File.basename(File.realpath(File.join(@frontend, 'current')))
+    assert File.exist?(@maintenance_path)
+    assert_equal 'smoke_credentials', report.fetch('failed_step')
+  end
+
   def test_全工程成功時だけメンテナンスを解除しDBのdownやrestoreを実行しない
-    release, runner = build_release
+    migration = Migration.new
+    release, runner = build_release(migration: migration)
     result = deploy(release)
     refute File.exist?(@maintenance_path)
     assert_equal 'succeeded', result.fetch(:status)
     text = runner.commands.flatten.join(' ')
     refute_match(/db:rollback|db:migrate:down|pg_restore/, text)
+    assert_includes migration.calls, :prepare_smoke_credentials
+    refute File.exist?(File.join(@backup_root, result.fetch(:release_id), '.smoke-test-credentials.json'))
   end
 
   def test_dry_runではリリースの副作用が発生しない

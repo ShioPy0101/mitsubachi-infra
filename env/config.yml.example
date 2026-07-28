@@ -47,6 +47,7 @@ release:
       - npm
       - run
       - smoke:production
+    credentials_task: deployment:prepare_smoke_test_credentials
     credentials_file: /etc/mitsubachi/smoke-test.env
     removed_manifest: /etc/mitsubachi/removed-routes.yml
     timeout_seconds: 900

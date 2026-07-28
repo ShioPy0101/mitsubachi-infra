@@ -272,7 +272,7 @@ module MitsubachiInfra
       end
       unless File.exist?(credentials_path)
         atomic_write(credentials_path,
-                     "# 本番smoke testの認証情報をKEY=value形式で設定してください。\n",
+                     "# 統合releaseではbackendが短寿命認証を自動生成するため未設定で構いません。\n",
                      owner: 'root', group: 'root', mode: '0600')
       end
       unless File.exist?(manifest_path)

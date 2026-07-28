@@ -259,8 +259,13 @@ module MitsubachiInfra
 
     def smoke_credentials_template
       <<~ENV
-        # 本番smoke testの認証情報をKEY=value形式で設定してください。
-        # frontendの smoke:production が要求する変数名に合わせます。
+        # 統合releaseではbackendが短寿命認証を自動生成するため、このファイルは未設定で構いません。
+        # 単独 smoke-test production で使う場合だけ以下を設定してください。
+        # MEMBER_TOKEN=
+        # ORGANIZATION_ADMIN_TOKEN=
+        # SYSTEM_ADMIN_TOKEN=
+        # PRIMARY_ORGANIZATION_ID=
+        # SECONDARY_ORGANIZATION_ID=
       ENV
     end
 
