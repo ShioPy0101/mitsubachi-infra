@@ -48,6 +48,19 @@ module MitsubachiInfra
         'remove_default_site' => false,
         'error_log_level' => 'info'
       },
+      'release' => {
+        'backup_root' => '/var/backups/mitsubachi/releases',
+        'minimum_free_kb' => 1_048_576,
+        'maintenance_flag' => '/var/lib/mitsubachi/maintenance.enabled',
+        'api_service' => 'mitsubachi-api.service',
+        'worker_service' => 'mitsubachi-worker.service',
+        'smoke_test' => {
+          'command' => %w[npm run smoke:production],
+          'credentials_file' => '/etc/mitsubachi/smoke-test.env',
+          'removed_manifest' => '/etc/mitsubachi/removed-routes.yml',
+          'timeout_seconds' => 900
+        }
+      },
       'backend' => {
         'repository' => 'git@github.com:ShioPy0101/mitsubachi-ruby.git',
         'ref' => 'main',
@@ -174,6 +187,7 @@ module MitsubachiInfra
       validate_frontend!
       validate_https!
       validate_nginx!
+      validate_release!
       validate_postgresql!
       true
     end
@@ -273,6 +287,27 @@ module MitsubachiInfra
       return if %w[debug info notice warn error crit alert emerg].include?(level)
 
       raise ValidationError, 'nginx.error_log_level must be one of debug, info, notice, warn, error, crit, alert, emerg'
+    end
+
+    def validate_release!
+      release = data.fetch('release')
+      %w[backup_root maintenance_flag].each do |key|
+        value = release.fetch(key).to_s
+        raise ValidationError, "release.#{key} must be absolute" unless value.start_with?('/')
+        reject_traversal!(value, "release.#{key}")
+      end
+      %w[api_service worker_service].each { |key| present!(release[key], "release.#{key}") }
+      positive_integer!(release.fetch('minimum_free_kb'), 'release.minimum_free_kb')
+      smoke = release.fetch('smoke_test')
+      unless smoke['command'].is_a?(Array) && smoke['command'].any? && smoke['command'].all? { |part| !part.to_s.empty? }
+        raise ValidationError, 'release.smoke_test.command must be a non-empty argv array'
+      end
+      %w[credentials_file removed_manifest].each do |key|
+        value = smoke.fetch(key).to_s
+        raise ValidationError, "release.smoke_test.#{key} must be absolute" unless value.start_with?('/')
+        reject_traversal!(value, "release.smoke_test.#{key}")
+      end
+      positive_integer!(smoke.fetch('timeout_seconds'), 'release.smoke_test.timeout_seconds')
     end
 
     def validate_postgresql!

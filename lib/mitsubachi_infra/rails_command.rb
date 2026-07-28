@@ -15,9 +15,9 @@ module MitsubachiInfra
       @runner = runner
     end
 
-    def rails(*args, release:, timeout: 600)
+    def rails(*args, release:, timeout: 600, env: {})
       @runner.deploy('bundle', 'exec', 'rails', *args, config: @config, chdir: release, timeout: timeout,
-                                                    env: rails_env)
+                                                    env: rails_env.merge(env))
     end
 
     def runner(script, release:, timeout: 600)

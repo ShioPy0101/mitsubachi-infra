@@ -32,6 +32,19 @@ module MitsubachiInfra
       lib/mitsubachi_infra/nginx.rb
       lib/mitsubachi_infra/systemd.rb
       lib/mitsubachi_infra/frontend_env.rb
+      lib/mitsubachi_infra/health_check.rb
+      lib/mitsubachi_infra/lock.rb
+      lib/mitsubachi_infra/rails_command.rb
+      lib/mitsubachi_infra/deployment/database_backup.rb
+      lib/mitsubachi_infra/deployment/diagnostics.rb
+      lib/mitsubachi_infra/deployment/maintenance.rb
+      lib/mitsubachi_infra/deployment/migration.rb
+      lib/mitsubachi_infra/deployment/preflight.rb
+      lib/mitsubachi_infra/deployment/release.rb
+      lib/mitsubachi_infra/deployment/release_manager.rb
+      lib/mitsubachi_infra/deployment/release_report.rb
+      lib/mitsubachi_infra/deployment/smoke_tester.rb
+      lib/mitsubachi_infra/deployment/step_result.rb
       templates/nginx/nginx.conf.erb
       templates/nginx/conf.d/mitsubachi-logging.conf.erb
       templates/nginx/lan.conf.erb

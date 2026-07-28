@@ -903,6 +903,79 @@ current 切り替え前の失敗は現行 release に影響しません。curren
 deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart mitsubachi-api.service
 ```
 
+## 統合本番リリース
+
+backend、frontend、DB migrationを短時間のメンテナンスモード下で一つのrelease IDとレポートにまとめる場合は、統合リリースを使用します。
+
+```bash
+sudo mitsubachi-infra deploy release \
+  --backend-ref <commit-or-tag> \
+  --frontend-ref <commit-or-tag>
+```
+
+最初に必ずdry-runを実行してください。dry-runはref解決、コマンド、設定、ディスク、保存先、systemd、Nginx、health URL/Host、smoke設定を検査しますが、メンテナンス、バックアップ、migration、symlink、service、Nginxの状態は変更しません。
+
+```bash
+sudo mitsubachi-infra deploy release \
+  --backend-ref <commit-or-tag> \
+  --frontend-ref <commit-or-tag> \
+  --dry-run
+```
+
+実工程はpreflight、release ID発行、単一deploy lock、maintenance enable、`pg_dump`、migration前snapshot、backend/frontend準備、migration、移行検証、両current切り替え、API/worker再起動、Nginx reload、readiness、production smoke/新API/権限/廃止route検証、report確定、maintenance disableの順です。migration前snapshot taskは現在稼働中backendから実行するため、統合リリースの初回利用前にそのtaskをbackendへ先行リリースしておく必要があります。
+
+成果物は`release.backup_root`（既定`/var/backups/mitsubachi/releases/<release-id>/`）に保存します。
+
+```text
+database.dump
+database.dump.sha256
+pre_migration_counts.json
+migration_report.json
+health_check_report.json
+smoke_test_report.json
+diagnostics/
+release.json
+```
+
+論理バックアップは`pg_dump`成功、非空、SHA-256作成、`pg_restore --list`成功まで確認します。これは復旧材料であり、自動rollbackではありません。DB restore、`db:rollback`、`db:migrate:down`は一切自動実行しません。
+
+### backend/frontend側の必須インターフェース
+
+現在稼働中backendにはsnapshot task、新backendにはmigration検証taskが必要です。いずれも秘密や個人データを標準出力へ出さず、`OUTPUT`で指定されたJSONを生成し、失敗時は非0で終了してください。
+
+```bash
+bin/rails deployment:pre_migration_snapshot OUTPUT=/path/pre_migration_counts.json
+bin/rails deployment:verify_migration OUTPUT=/path/migration_report.json
+```
+
+検証JSONは最低限`valid: true`を含め、未移行、重複、不整合を表す件数は0にします。infraは`without`、`unmigrated`、`duplicate`、`mismatch`、`invalid`、`orphan`を含むカウンターが非0なら失敗と判定します。
+
+frontendのcurrent releaseには、`release.smoke_test.command`（既定`npm run smoke:production`）が必要です。Playwright等でmember、organization_admin、system_adminのログイン、Drive、Trash、管理画面、Organization切り替えと保持、権限制御、新API、主要画面を検証し、`OUTPUT`へ`{"succeeded":true}`を含むJSONを出してください。`RELEASE_ID`、`OUTPUT`、`CREDENTIALS_FILE`、`BASE_URL`、`API_BASE_URL`、`FRONTEND_HOST`、`API_HOST`が渡されます。
+
+本番テスト認証情報は`release.smoke_test.credentials_file`（既定`/etc/mitsubachi/smoke-test.env`）へroot専用mode`0600`で置きます。内容はログやreportへコピーされません。廃止API/画面は`release.smoke_test.removed_manifest`から読みます。[例](env/removed-routes.yml.example)の期待statusと完全一致する必要があり、200、redirect、401、403は404の代わりとして認めません。localhostからのsmokeだけはmaintenanceを迂回し、通常の外部frontend/APIは503になります。readinessはmaintenance中も利用可能です。
+
+### health checkと診断
+
+connection refused、timeout、一時的client error、HTTP 4xx/5xxは試行ごとに分類して待機します。制限内にHTTP 2xxかつ`{"status":"ready"}`になった場合だけ成功し、成功試行回数と所要時間をログとJSONへ必ず記録します。再起動直後の1回目のconnection refusedは起動途中として許容されます。全試行失敗時だけdeployを失敗させ、API/workerのstatusとjournal、listening socket、Host付きcurlを`diagnostics/`に保存します。診断取得の失敗は元の失敗理由を上書きしません。
+
+### メンテナンスと失敗時対応
+
+```bash
+sudo mitsubachi-infra maintenance enable
+sudo mitsubachi-infra maintenance status
+sudo mitsubachi-infra maintenance disable
+```
+
+フラグは`release.maintenance_flag`（既定`/var/lib/mitsubachi/maintenance.enabled`）です。enable/disableは冪等です。migration前にバックアップや配置が失敗しDBが未変更なら旧版を維持して自動解除します。migration開始後の失敗はcurrentを変更せずmaintenanceを維持します。current切り替え後の失敗は両symlinkを直前releaseへ戻し、API/worker再起動、Nginx reload、rollback後healthを行いますが、DBは戻しません。旧コードとmigration後DBの互換性を確認できない場合、手動でmaintenanceを解除しないでください。
+
+手動のアプリ切り戻しは、release reportの`previous_backend_release_id`と`previous_frontend_release_id`を確認して既存のrollbackコマンドを使います。実行前にcurrentと対象releaseを確認してください。DB復元は別の明示的な復旧判断・手順で行い、統合releaseの一部として実行しません。
+
+### migration安全性
+
+migrationは原則として後方互換でなければなりません。カラム削除、rename、型変更、大量更新を単一releaseで行わず、Expand/Contract方式を使います。大量データ更新はschema migrationから分離し、コードrollback後も旧版がmigration後DBで動く状態を維持します。バックアップは自動rollback機構ではありません。
+
+カラム廃止は、(1) 新カラム追加、(2) 新旧両対応コード、(3) データ移行、(4) 旧カラムを使わないコード、(5) 十分な確認期間、(6) 旧カラム削除、の複数releaseに分けます。
+
 ## Rollback
 
 直前 release:

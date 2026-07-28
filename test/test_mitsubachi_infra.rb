@@ -578,6 +578,19 @@ class MitsubachiInfraTest < Minitest::Test
       'lib/mitsubachi_infra/nginx.rb',
       'lib/mitsubachi_infra/systemd.rb',
       'lib/mitsubachi_infra/frontend_env.rb',
+      'lib/mitsubachi_infra/health_check.rb',
+      'lib/mitsubachi_infra/lock.rb',
+      'lib/mitsubachi_infra/rails_command.rb',
+      'lib/mitsubachi_infra/deployment/database_backup.rb',
+      'lib/mitsubachi_infra/deployment/diagnostics.rb',
+      'lib/mitsubachi_infra/deployment/maintenance.rb',
+      'lib/mitsubachi_infra/deployment/migration.rb',
+      'lib/mitsubachi_infra/deployment/preflight.rb',
+      'lib/mitsubachi_infra/deployment/release.rb',
+      'lib/mitsubachi_infra/deployment/release_manager.rb',
+      'lib/mitsubachi_infra/deployment/release_report.rb',
+      'lib/mitsubachi_infra/deployment/smoke_tester.rb',
+      'lib/mitsubachi_infra/deployment/step_result.rb',
       'templates/nginx/nginx.conf.erb',
       'templates/nginx/conf.d/mitsubachi-logging.conf.erb',
       'templates/nginx/lan.conf.erb',
@@ -2468,27 +2481,38 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
-  def test_health_check_403_fails_without_retrying
+  def test_health_checkは403を再試行して後続成功を許容する
     io = StringIO.new
     capture_health_sequence([403, 200]) do |requests|
-      error = assert_raises(MitsubachiInfra::Error) do
-        MitsubachiInfra::HealthCheck.new(logger: io)
-                                    .check!('http://127.0.0.1:3000/api/health/ready',
-                                            host: 'mitsubachi-api.shiosalt.com', attempts: 30, delay: 0)
-      end
+      result = MitsubachiInfra::HealthCheck.new(logger: io)
+                                           .check!('http://127.0.0.1:3000/api/health/ready',
+                                                   host: 'mitsubachi-api.shiosalt.com', attempts: 2, delay: 0)
 
-      assert_equal 1, requests.length
-      assert_includes error.message, 'Rails returned HTTP 403'
-      assert_includes error.message, 'ALLOWED_HOSTS/config.hosts'
+      assert_equal 2, requests.length
+      assert_equal 2, result.attempts
+      assert_includes io.string, 'result=http_403'
+      assert_includes io.string, '[OK] health check passed 2/2'
     end
   end
 
-  def test_health_check_connection_refused_retries
+  def test_health_checkはconnection_refusedを再試行する
     capture_health_sequence([Errno::ECONNREFUSED.new, 200]) do |requests|
       assert MitsubachiInfra::HealthCheck.new(logger: StringIO.new)
                                         .check!('http://127.0.0.1:3000/api/health/ready',
                                                 host: 'mitsubachi-api.shiosalt.com', attempts: 2, delay: 0)
       assert_equal 1, requests.length
+    end
+  end
+
+  def test_health_checkは全試行失敗後にだけ失敗する
+    capture_health_sequence([503, 503]) do |requests|
+      error = assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::HealthCheck.new(logger: StringIO.new)
+                                    .check!('http://127.0.0.1:3000/api/health/ready',
+                                            host: 'mitsubachi-api.shiosalt.com', attempts: 2, delay: 0)
+      end
+      assert_equal 2, requests.length
+      assert_includes error.message, 'after 2 attempts'
     end
   end
 
