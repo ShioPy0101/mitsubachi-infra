@@ -6,7 +6,8 @@ require_relative '../errors'
 module MitsubachiInfra
   module Deployment
     class Preflight
-      REQUIRED_COMMANDS = %w[git bundle npm pg_dump pg_restore sha256sum nginx systemctl curl ss journalctl].freeze
+      DEPLOY_COMMANDS = %w[git bundle npm].freeze
+      SYSTEM_COMMANDS = %w[pg_dump pg_restore nginx systemctl curl ss journalctl].freeze
 
       def initialize(config:, runner:, logger: $stderr)
         @config = config
@@ -17,7 +18,8 @@ module MitsubachiInfra
       def check!(backend_ref:, frontend_ref:, dry_run: false)
         validate_ref!(backend_ref, 'backend')
         validate_ref!(frontend_ref, 'frontend')
-        REQUIRED_COMMANDS.each { |command| require_command!(command) }
+        DEPLOY_COMMANDS.each { |command| require_deploy_command!(command) }
+        SYSTEM_COMMANDS.each { |command| require_system_command!(command) }
         check_directory!(@config.fetch('release').fetch('backup_root'))
         check_nginx!
         check_service!(api_service)
@@ -46,9 +48,14 @@ module MitsubachiInfra
         raise ValidationError, "--#{name}-ref is required" if ref.to_s.empty? || ref.to_s.start_with?('-')
       end
 
-      def require_command!(command)
+      def require_system_command!(command)
         result = probe('which', command, allow_failure: true)
         raise Error, "required command is missing: #{command}" unless result.success?
+      end
+
+      def require_deploy_command!(command)
+        result = probe_deploy('which', command, config: @config, allow_failure: true)
+        raise Error, "required deploy-user command is missing: #{command}" unless result.success?
       end
 
       def check_directory!(path)
