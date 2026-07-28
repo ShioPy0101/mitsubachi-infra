@@ -1345,6 +1345,21 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes io.string, '<redacted>'
   end
 
+  def test_command_runnerは失敗例外のcommandから秘密値を除去する
+    io = StringIO.new
+    runner = MitsubachiInfra::CommandRunner.new(logger: io)
+
+    error = assert_raises(MitsubachiInfra::CommandError) do
+      runner.run('false', 'DATABASE_URL=postgresql://app:secret@127.0.0.1/db',
+                 'RAILS_MASTER_KEY=master-secret', 'RESEND_API_KEY=mail-secret')
+    end
+
+    refute_includes error.message, 'app:secret'
+    refute_includes error.message, 'master-secret'
+    refute_includes error.message, 'mail-secret'
+    assert_operator error.message.scan('<redacted>').length, :>=, 3
+  end
+
   def test_command_runner_runs_when_chdir_is_nil
     runner = MitsubachiInfra::CommandRunner.new(logger: StringIO.new, dry_run: false)
     result = runner.run(RbConfig.ruby, '-e', 'print "ok"', chdir: nil)

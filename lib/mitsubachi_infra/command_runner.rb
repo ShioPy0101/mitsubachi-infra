@@ -59,7 +59,7 @@ module MitsubachiInfra
       result = Result.new(stdout: stdout, stderr: stderr, status: status)
       log_output(stdout, stderr) if result.success?
       if !result.success? && !allow_failure
-        raise CommandError.new(command: argv, status: status, stdout: mask(stdout),
+        raise CommandError.new(command: argv.map { |argument| mask(argument) }, status: status, stdout: mask(stdout),
                                stderr: mask(stderr), chdir: chdir, user: display_user, timeout: timeout)
       end
 
