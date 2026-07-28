@@ -36,6 +36,21 @@ acme_email: admin@shiosalt.com
 nginx:
   error_log_level: warn
 
+release:
+  backup_root: /var/backups/mitsubachi/releases
+  minimum_free_kb: 1048576
+  maintenance_flag: /var/lib/mitsubachi/maintenance.enabled
+  api_service: mitsubachi-api.service
+  worker_service: mitsubachi-worker.service
+  smoke_test:
+    command:
+      - npm
+      - run
+      - smoke:production
+    credentials_file: /etc/mitsubachi/smoke-test.env
+    removed_manifest: /etc/mitsubachi/removed-routes.yml
+    timeout_seconds: 900
+
 backend:
   repository: git@github.com:ShioPy0101/mitsubachi-ruby.git
   ref: main

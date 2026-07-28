@@ -11,13 +11,31 @@ server {
     listen [::]:80;
     server_name <%= config.frontend_host %> <%= config.api_host %>;
 
+    root <%= File.join(config.fetch("paths").fetch("frontend_root"), "current", config.fetch("frontend").fetch("output_directory")) %>;
+    error_page 418 = @local_smoke_frontend;
+    set $mitsubachi_local_smoke "";
+    if ($remote_addr = 127.0.0.1) { set $mitsubachi_local_smoke L; }
+    if ($remote_addr = ::1) { set $mitsubachi_local_smoke L; }
+    if ($host = <%= config.frontend_host %>) { set $mitsubachi_local_smoke "${mitsubachi_local_smoke}F"; }
+
     location ^~ /.well-known/acme-challenge/ {
         root <%= config.fetch("https").fetch("acme_webroot") %>;
         default_type text/plain;
     }
 
     location / {
+        if ($mitsubachi_local_smoke = LF) { return 418; }
+        set $mitsubachi_maintenance "";
+        if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
+        if ($remote_addr = 127.0.0.1) { set $mitsubachi_maintenance ""; }
+        if ($remote_addr = ::1) { set $mitsubachi_maintenance ""; }
+        if ($mitsubachi_maintenance = enabled) { return 503; }
         return 301 https://$host$request_uri;
+    }
+
+    location @local_smoke_frontend {
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
     }
 }
 
@@ -38,16 +56,31 @@ server {
     index index.html;
 
     location = /index.html {
+        set $mitsubachi_maintenance "";
+        if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
+        if ($remote_addr = 127.0.0.1) { set $mitsubachi_maintenance ""; }
+        if ($remote_addr = ::1) { set $mitsubachi_maintenance ""; }
+        if ($mitsubachi_maintenance = enabled) { return 503; }
         add_header Cache-Control "no-cache";
         try_files /index.html =404;
     }
 
     location /assets/ {
+        set $mitsubachi_maintenance "";
+        if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
+        if ($remote_addr = 127.0.0.1) { set $mitsubachi_maintenance ""; }
+        if ($remote_addr = ::1) { set $mitsubachi_maintenance ""; }
+        if ($mitsubachi_maintenance = enabled) { return 503; }
         add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
     }
 
     location / {
+        set $mitsubachi_maintenance "";
+        if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
+        if ($remote_addr = 127.0.0.1) { set $mitsubachi_maintenance ""; }
+        if ($remote_addr = ::1) { set $mitsubachi_maintenance ""; }
+        if ($mitsubachi_maintenance = enabled) { return 503; }
         add_header Cache-Control "no-cache";
         try_files $uri $uri/ /index.html;
     }
@@ -66,7 +99,17 @@ server {
     client_body_timeout 3600s;
     send_timeout 3600s;
 
+    location = <%= config.fetch("backend").fetch("health_path") %>/ready {
+        proxy_pass http://127.0.0.1:<%= config.fetch("ports").fetch("rails") %>;
+        proxy_set_header Host $host;
+    }
+
     location / {
+        set $mitsubachi_maintenance "";
+        if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
+        if ($remote_addr = 127.0.0.1) { set $mitsubachi_maintenance ""; }
+        if ($remote_addr = ::1) { set $mitsubachi_maintenance ""; }
+        if ($mitsubachi_maintenance = enabled) { return 503; }
         proxy_pass http://127.0.0.1:<%= config.fetch("ports").fetch("rails") %>;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

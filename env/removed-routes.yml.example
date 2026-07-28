@@ -1,0 +1,8 @@
+removed_endpoints:
+  - method: GET
+    path: /api/v1/old-audit-logs
+    expected_status: 404
+
+removed_pages:
+  - path: /admin/old-audit-logs
+    expected_status: 404

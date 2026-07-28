@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'optparse'
+require 'fileutils'
+require 'json'
 require_relative 'certbot'
 require_relative 'command_runner'
 require_relative 'configuration'
@@ -8,6 +10,9 @@ require_relative 'deploy_user'
 require_relative 'deployment/backend'
 require_relative 'deployment/frontend'
 require_relative 'deployment/rollback'
+require_relative 'deployment/release'
+require_relative 'deployment/maintenance'
+require_relative 'deployment/smoke_tester'
 require_relative 'errors'
 require_relative 'frontend_env'
 require_relative 'health_check'
@@ -65,6 +70,8 @@ module MitsubachiInfra
       when 'config' then config
       when 'https' then https
       when 'postgres' then postgres
+      when 'maintenance' then maintenance
+      when 'smoke-test' then smoke_test
       else raise ValidationError, "unknown command: #{command}"
       end
       0
@@ -110,7 +117,16 @@ module MitsubachiInfra
         parser.on('--ref REF') { |v| opts[:ref] = v }
         parser.on('--backend-ref REF') { |v| opts[:backend_ref] = v }
         parser.on('--frontend-ref REF') { |v| opts[:frontend_ref] = v }
+        parser.on('--dry-run') do
+          @options[:dry_run] = true
+          @runner.dry_run = true
+        end
       end.parse!(@argv)
+      if target == 'release'
+        Deployment::Release.new(config: @config, runner: @runner, logger: $stderr)
+                           .deploy(backend_ref: opts[:backend_ref], frontend_ref: opts[:frontend_ref])
+        return
+      end
       locked do
         if production_configured?
           production.deploy(target, backend_ref: opts[:backend_ref] || opts[:ref],
@@ -133,6 +149,58 @@ module MitsubachiInfra
         else raise ValidationError, 'deploy target must be all, backend, or frontend'
         end
       end
+    end
+
+    def maintenance
+      action = @argv.shift || 'status'
+      OptionParser.new.parse!(@argv)
+      @config.validate!
+      manager = Deployment::Maintenance.new(path: @config.fetch('release').fetch('maintenance_flag'),
+                                             runner: @runner, logger: $stderr)
+      case action
+      when 'enable' then locked { manager.enable }
+      when 'disable' then locked { manager.disable }
+      when 'status'
+        puts(manager.enabled? ? 'enabled' : 'disabled')
+      else raise ValidationError, 'maintenance command must be enable, disable, or status'
+      end
+    end
+
+    def smoke_test
+      environment = @argv.shift
+      raise ValidationError, 'smoke-test target must be production' unless environment == 'production'
+
+      opts = {}
+      OptionParser.new { |parser| parser.on('--release-id ID') { |value| opts[:release_id] = value } }.parse!(@argv)
+      raise ValidationError, '--release-id is required' if opts[:release_id].to_s.empty?
+      unless opts[:release_id].match?(/\A[A-Za-z0-9][A-Za-z0-9+_.-]*\z/) && !opts[:release_id].include?('..')
+        raise ValidationError, '--release-id contains unsafe characters'
+      end
+
+      @config.validate!
+      root = @config.fetch('release').fetch('backup_root')
+      directory = File.join(root, opts[:release_id])
+      raise ValidationError, "release report directory is missing: #{directory}" unless File.directory?(directory)
+
+      output = File.join(directory, 'smoke_test_report.json')
+      Deployment::SmokeTester.new(config: @config, runner: @runner, logger: $stderr)
+                             .run!(release_id: opts[:release_id], output: output)
+      update_smoke_release_report(directory, output)
+    end
+
+    def update_smoke_release_report(directory, output)
+      path = File.join(directory, 'release.json')
+      return unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      data['smoke_test'] = { 'succeeded' => true, 'report_path' => output }
+      temp = "#{path}.tmp.#{$PROCESS_ID}"
+      File.write(temp, JSON.pretty_generate(data) + "\n", mode: 'w', perm: 0o640)
+      File.rename(temp, path)
+    rescue JSON::ParserError => e
+      raise Error, "release report is invalid JSON: #{e.message}"
+    ensure
+      FileUtils.rm_f(temp) if defined?(temp) && temp
     end
 
     def rollback
@@ -260,6 +328,7 @@ module MitsubachiInfra
           mitsubachi-infra configure [--dry-run]
           mitsubachi-infra install [--interactive] [--remove-nginx-default-site] [--dry-run]
           mitsubachi-infra deploy [all|backend|frontend] [--ref REF] [--dry-run]
+          mitsubachi-infra deploy release --backend-ref REF --frontend-ref REF [--dry-run]
           mitsubachi-infra deploy --all|--backend|--frontend [--ref REF] [--dry-run]
           mitsubachi-infra deploy-backend [--dry-run]
           mitsubachi-infra deploy-frontend [--dry-run]
@@ -283,6 +352,8 @@ module MitsubachiInfra
           mitsubachi-infra postgres base-backup create [--checkpoint fast|spread] [--yes] [--dry-run]
           mitsubachi-infra postgres base-backup list [--json]
           mitsubachi-infra postgres base-backup prune [--retention-days DAYS] [--minimum COUNT] [--yes] [--dry-run]
+          mitsubachi-infra maintenance enable|disable|status
+          mitsubachi-infra smoke-test production --release-id ID
       USAGE
     end
 
@@ -325,7 +396,8 @@ module MitsubachiInfra
     end
 
     def root_required?(command, argv)
-      return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test].include?(command)
+      return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test smoke-test].include?(command)
+      return true if command == 'maintenance' && %w[enable disable].include?(argv.first || 'status')
       return true if command == 'postgres' && %w[wal-archive base-backup].include?(argv.first)
       return false unless command == 'https'
 

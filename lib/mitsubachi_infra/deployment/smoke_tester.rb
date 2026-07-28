@@ -1,0 +1,108 @@
+# frozen_string_literal: true
+
+require 'json'
+require 'net/http'
+require 'uri'
+require 'yaml'
+require_relative '../errors'
+
+module MitsubachiInfra
+  module Deployment
+    class SmokeTester
+      def initialize(config:, runner:, logger: $stderr)
+        @config = config
+        @runner = runner
+        @logger = logger
+      end
+
+      def run!(release_id:, output:)
+        settings = @config.fetch('release').fetch('smoke_test')
+        validate_credentials!(settings.fetch('credentials_file')) unless @runner.dry_run
+        env = {
+          'RELEASE_ID' => release_id,
+          'OUTPUT' => output,
+          'CREDENTIALS_FILE' => settings.fetch('credentials_file'),
+          'BASE_URL' => internal_frontend_url,
+          'API_BASE_URL' => internal_api_url,
+          'FRONTEND_HOST' => @config.frontend_host,
+          'API_HOST' => @config.health_host
+        }
+        @runner.deploy(*settings.fetch('command'), config: @config,
+                                                    chdir: File.join(@config.frontend_root, 'current'),
+                                                    env: env, timeout: settings.fetch('timeout_seconds'))
+        return { succeeded: true, dry_run: true } if @runner.dry_run
+
+        report = read_report(output)
+        raise Error, 'production smoke test reported succeeded=false' unless report['succeeded'] == true
+
+        begin
+          report['removed_routes'] = check_removed!(settings.fetch('removed_manifest'))
+        rescue StandardError => error
+          report['succeeded'] = false
+          report['removed_routes_error'] = error.message
+          write_report(output, report)
+          raise
+        end
+        write_report(output, report)
+        report
+      end
+
+      private
+
+      def validate_credentials!(path)
+        raise Error, "smoke-test credentials are missing: #{path}" unless File.file?(path)
+        raise Error, "smoke-test credentials must be mode 0600: #{path}" unless (File.stat(path).mode & 0o077).zero?
+      end
+
+      def write_report(path, report)
+        File.write(path, JSON.pretty_generate(report) + "\n", mode: 'w', perm: 0o640)
+        File.chmod(0o640, path)
+      end
+
+      def read_report(path)
+        raise Error, "smoke test did not create report: #{path}" unless File.file?(path)
+
+        JSON.parse(File.read(path))
+      rescue JSON::ParserError => e
+        raise Error, "smoke test generated invalid JSON: #{e.message}"
+      end
+
+      def check_removed!(manifest_path)
+        return [] if manifest_path.to_s.empty? || !File.file?(manifest_path)
+
+        manifest = YAML.safe_load(File.read(manifest_path), permitted_classes: [], aliases: false) || {}
+        endpoints = Array(manifest['removed_endpoints']).map { |entry| check_route(entry, api: true) }
+        pages = Array(manifest['removed_pages']).map { |entry| check_route(entry, api: false) }
+        endpoints + pages
+      end
+
+      def check_route(entry, api:)
+        method = entry.fetch('method', 'GET').upcase
+        expected = Integer(entry.fetch('expected_status', 404))
+        base = api ? internal_api_url : internal_frontend_url
+        uri = URI.join(base, entry.fetch('path'))
+        request_class = Net::HTTP.const_get(method.capitalize)
+        request = request_class.new(uri.request_uri)
+        request['Host'] = api ? @config.health_host : frontend_host
+        response = Net::HTTP.start(uri.host, uri.port, open_timeout: 5, read_timeout: 10) { |http| http.request(request) }
+        actual = response.code.to_i
+        raise Error, "removed route #{method} #{entry.fetch('path')} returned #{actual}, expected #{expected}" unless actual == expected
+        raise Error, "removed route redirected: #{entry.fetch('path')}" if response.is_a?(Net::HTTPRedirection)
+
+        { method: method, path: entry.fetch('path'), expected_status: expected, actual_status: actual, passed: true }
+      end
+
+      def internal_frontend_url
+        'http://127.0.0.1/'
+      end
+
+      def internal_api_url
+        "http://127.0.0.1:#{@config.fetch('ports').fetch('rails')}/"
+      end
+
+      def frontend_host
+        @config.public? ? @config.frontend_host : @config.fetch('server_ip')
+      end
+    end
+  end
+end
