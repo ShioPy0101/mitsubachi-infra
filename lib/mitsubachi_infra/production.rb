@@ -103,8 +103,8 @@ module MitsubachiInfra
       frontend_doctor_lines.each { |line| @logger.puts(line) }
       @logger.puts("[LOCAL] Nginx validation: #{privileged_success?('nginx', '-t') ? 'ok' : 'failed'}")
       @logger.puts("[LOCAL] Minecraft ports preserved in configuration: #{minecraft_ports.join(', ')}")
-      @logger.puts("[EXTERNAL] Frontend HTTPS: #{http_ok?(@config.production_frontend_url) ? 'OK' : 'not verified'}")
-      @logger.puts("[EXTERNAL] API HTTPS: #{http_ok?("#{@config.production_api_url}#{@config.fetch('backend').fetch('health_path')}/ready") ? 'OK' : 'not verified'}")
+      @logger.puts("[LOCAL] Frontend via Nginx: #{http_ok?('http://127.0.0.1/', host: @config.frontend_host) ? 'OK' : 'not verified'}")
+      @logger.puts("[LOCAL] API readiness: #{http_ok?(backend_health_url, host: @config.api_host) ? 'OK' : 'not verified'}")
     end
 
     def doctor
@@ -512,11 +512,16 @@ module MitsubachiInfra
       end
     end
 
-    def http_ok?(url)
+    def http_ok?(url, host: nil)
       return true if @runner.dry_run
 
       uri = URI(url)
-      response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', open_timeout: 5, read_timeout: 5) { |http| http.get(uri.request_uri) }
+      response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', open_timeout: 5,
+                                                    read_timeout: 5) do |http|
+        request = Net::HTTP::Get.new(uri.request_uri)
+        request['Host'] = host if host
+        http.request(request)
+      end
       response.code.to_i == 200
     rescue StandardError
       false
