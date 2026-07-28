@@ -435,6 +435,28 @@ class ReleaseDeploymentTest < Minitest::Test
     assert File.exist?(source)
   end
 
+  def test_public_smokeは本番ホストのHTTPSとloopback接続先を渡しRails_readinessを分離する
+    @config.set('deployment_mode', 'public')
+    @config.set('https.frontend_host', 'mitsubachi.shiosalt.com')
+    @config.set('https.api_host', 'mitsubachi-api.shiosalt.com')
+    @config.set('ports.rails', 3000)
+    captured_env = nil
+    runner = Runner.new(dry_run: true)
+    runner.define_singleton_method(:deploy) do |*_command, **options|
+      captured_env = options.fetch(:env)
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+    tester = MitsubachiInfra::Deployment::SmokeTester.new(config: @config, runner: runner,
+                                                          logger: StringIO.new)
+
+    tester.run!(release_id: 'release-id', output: File.join(@root, 'smoke-report.json'))
+
+    assert_equal 'https://mitsubachi.shiosalt.com/', captured_env.fetch('BASE_URL')
+    assert_equal 'https://mitsubachi-api.shiosalt.com/', captured_env.fetch('API_BASE_URL')
+    assert_equal '127.0.0.1', captured_env.fetch('SMOKE_RESOLVED_ADDRESS')
+    assert_equal 'http://127.0.0.1:3000/api/health/ready', captured_env.fetch('RAILS_READINESS_URL')
+  end
+
   private
 
   def with_http_status(status, &block)

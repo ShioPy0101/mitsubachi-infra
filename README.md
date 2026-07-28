@@ -953,7 +953,11 @@ bin/rails deployment:prepare_smoke_test_credentials OUTPUT=/path/smoke-test-cred
 
 新backendには`release.smoke_test.credentials_task`（既定`deployment:prepare_smoke_test_credentials`）も必要です。統合リリースはmigration検証後にこのtaskを実行し、三権限の専用ユーザーと15分有効・一度限りのログイントークンを含むmode `0600`のJSONを生成します。資格情報はrelease reportへ記録せず、スモーク終了時および失敗終了時に削除します。そのため、統合リリースで`/etc/mitsubachi/smoke-test.env`へ固定パスワードを手入力する必要はありません。
 
-frontendの新releaseには、`release.smoke_test.command`（既定`npm run smoke:production`）が必要です。member、organization_admin、system_adminのログイン、Drive、Trash、管理画面、Organization切り替え、権限制御、新API、主要画面を検証し、`OUTPUT`へ`{"succeeded":true}`を含むJSONを出してください。`RELEASE_ID`、`OUTPUT`、`CREDENTIALS_FILE`、`BASE_URL`、`API_BASE_URL`、`FRONTEND_HOST`、`API_HOST`が渡されます。
+frontendの新releaseには、`release.smoke_test.command`（既定`npm run smoke:production`）が必要です。member、organization_admin、system_adminのログイン、Drive、Trash、管理画面、Organization切り替え、権限制御、新API、主要画面を検証し、`OUTPUT`へ`{"succeeded":true}`を含むJSONを出してください。`RELEASE_ID`、`OUTPUT`、`CREDENTIALS_FILE`、`BASE_URL`、`API_BASE_URL`、`FRONTEND_HOST`、`API_HOST`、`RAILS_READINESS_URL`、`SMOKE_RESOLVED_ADDRESS`が渡されます。
+
+public modeの`BASE_URL`と`API_BASE_URL`はそれぞれ`https://<frontend-host>/`と`https://<api-host>/`です。smokeプロセスはURL、HTTP Host、TLS SNI、証明書の検証名を本番ドメインのまま維持し、名前解決だけを`SMOKE_RESOLVED_ADDRESS=127.0.0.1`へ固定します。外部DNS、外部ネットワーク、恒久的な`/etc/hosts`変更には依存せず、TLS証明書検証も無効化しません。`RAILS_READINESS_URL=http://127.0.0.1:3000/api/health/ready`だけはNginx公開経路ではなくPuma起動確認のための直結です。HTTP/80はHTTPS公開経路のsmokeには使いません。
+
+HTTP status不一致または通信失敗時、`smoke_test_report.json`の失敗checkにはrequested URL、loopback接続先、HTTP Host、TLS servername、status、response headers、本文先頭、失敗項目を保存します。`Set-Cookie`と本文中のtoken/password/secret/cookie値はredactし、資格情報そのものは保存しません。
 
 `release.smoke_test.credentials_file`（既定`/etc/mitsubachi/smoke-test.env`）は単独の`smoke-test production`を手動実行する場合の互換用です。統合リリースではbackend taskの一時JSONを優先します。内容はログやreportへコピーされません。廃止API/画面は`release.smoke_test.removed_manifest`から読みます。[例](env/removed-routes.yml.example)の期待statusと完全一致する必要があり、200、redirect、401、403は404の代わりとして認めません。localhostからのsmokeだけはmaintenanceを迂回し、通常の外部frontend/APIは503になります。readinessはmaintenance中も利用可能です。
 
