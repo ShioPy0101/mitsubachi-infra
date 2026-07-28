@@ -2593,6 +2593,18 @@ class MitsubachiInfraTest < Minitest::Test
     assert_equal 'http://127.0.0.1:3000/api/health/ready', production.send(:backend_health_url)
   end
 
+  def test_production_checkの疎通確認もlocalhostと設定Hostを使用する
+    config = production_config('/tmp/mitsubachi-test')
+    production = MitsubachiInfra::Production.new(config: config, repo_root: ROOT, runner: RecordingRunner.new,
+                                                 logger: StringIO.new)
+
+    request = capture_health_request do |_url|
+      assert production.send(:http_ok?, 'http://127.0.0.1/', host: config.frontend_host)
+    end
+
+    assert_equal 'mitsubachi.shiosalt.com', request['Host']
+  end
+
   def test_lan_health_host_uses_server_ip_with_internal_url
     config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
       'deployment_mode' => 'lan',
