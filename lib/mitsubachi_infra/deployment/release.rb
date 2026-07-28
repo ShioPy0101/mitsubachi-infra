@@ -313,7 +313,7 @@ module MitsubachiInfra
       end
 
       def health_check(report_path)
-        @health.check!(health_url, host: @config.health_host, expected_json: { status: 'ready' },
+        @health.check!(health_url, host: @config.health_host, expected_json: { status: %w[ready ok] },
                                    report_path: report_path)
       end
 
