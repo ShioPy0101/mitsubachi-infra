@@ -239,13 +239,36 @@ module MitsubachiInfra
     def install_env_files
       rails_path = @config.fetch('paths').fetch('rails_env')
       frontend_path = @config.fetch('paths').fetch('frontend_env')
-      return @output.puts("[DRY-RUN] write #{rails_path} and #{frontend_path}") if @runner.dry_run
+      smoke = @config.fetch('release').fetch('smoke_test')
+      credentials_path = smoke.fetch('credentials_file')
+      manifest_path = smoke.fetch('removed_manifest')
+      if @runner.dry_run
+        return @output.puts("[DRY-RUN] ensure #{rails_path}, #{frontend_path}, #{credentials_path}, and #{manifest_path}")
+      end
 
       writer = AtomicWriter.new(runner: @runner)
       writer.write(rails_path, EnvTemplates.rails_env(@config), owner: 'root',
                    group: @config.fetch('deploy').fetch('user'), mode: '0640') unless File.exist?(rails_path)
       writer.write(frontend_path, EnvTemplates.frontend_env(@config), owner: 'root',
                    group: @config.fetch('deploy').fetch('user'), mode: '0640') unless File.exist?(frontend_path)
+      writer.write(credentials_path, smoke_credentials_template, owner: 'root', group: 'root',
+                   mode: '0600', backup: false) unless File.exist?(credentials_path)
+      writer.write(manifest_path, removed_routes_template, owner: 'root', group: 'root',
+                   mode: '0644', backup: false) unless File.exist?(manifest_path)
+    end
+
+    def smoke_credentials_template
+      <<~ENV
+        # 本番smoke testの認証情報をKEY=value形式で設定してください。
+        # frontendの smoke:production が要求する変数名に合わせます。
+      ENV
+    end
+
+    def removed_routes_template
+      <<~YAML
+        removed_endpoints: []
+        removed_pages: []
+      YAML
     end
 
     def install_templates

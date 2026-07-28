@@ -2939,8 +2939,36 @@ class MitsubachiInfraTest < Minitest::Test
         'challenge' => 'http-01',
         'acme_webroot' => '/var/lib/mitsubachi/acme',
         'enable_hsts' => false
+      },
+      'release' => {
+        'backup_root' => File.join(root, 'backups', 'releases'),
+        'maintenance_flag' => File.join(root, 'var', 'lib', 'maintenance.enabled'),
+        'smoke_test' => {
+          'command' => %w[npm run smoke:production],
+          'credentials_file' => File.join(root, 'etc', 'smoke-test.env'),
+          'removed_manifest' => File.join(root, 'etc', 'removed-routes.yml'),
+          'timeout_seconds' => 900
+        }
       }
     ))
+  end
+
+  def test_installはsmoke認証情報と廃止route_manifestを安全に自動生成する
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      installer = MitsubachiInfra::Installer.new(config: config, runner: RecordingRunner.new,
+                                                 repo_root: ROOT, output: StringIO.new)
+
+      installer.send(:install_env_files)
+
+      credentials = config.fetch('release').fetch('smoke_test').fetch('credentials_file')
+      manifest = config.fetch('release').fetch('smoke_test').fetch('removed_manifest')
+      assert_path_exists credentials
+      assert_equal 0o600, File.stat(credentials).mode & 0o777
+      assert_includes File.read(credentials), 'KEY=value'
+      assert_path_exists manifest
+      assert_equal "removed_endpoints: []\nremoved_pages: []\n", File.read(manifest)
+    end
   end
 
   def test_nginx_public_template_renders_frontend_and_api_domains
