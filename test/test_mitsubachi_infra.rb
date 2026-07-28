@@ -2294,9 +2294,9 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, 'server_name mitsubachi-api.shiosalt.com;'
     assert_includes rendered, '/.well-known/acme-challenge/'
     assert_includes rendered, 'root /var/lib/mitsubachi/acme;'
-    assert_includes rendered, 'try_files $uri $uri/ @frontend_spa;'
-    assert_includes rendered, 'location @frontend_spa {'
-    assert_includes rendered, 'rewrite ^ /index.html last;'
+    assert_includes rendered, 'error_page 404 =200 /index.html;'
+    assert_includes rendered, 'try_files $uri $uri/ =404;'
+    refute_includes rendered, 'location @frontend_spa {'
     assert_includes rendered, 'proxy_set_header X-Forwarded-Host $host;'
     assert_includes rendered, 'location /internal/storage/drive_items/'
     assert_includes rendered, 'internal;'
@@ -2995,7 +2995,7 @@ class MitsubachiInfraTest < Minitest::Test
                                   .render(mode: 'public_https')
       assert_includes rendered, 'mitsubachi.shiosalt.com'
       assert_includes rendered, 'mitsubachi-api.shiosalt.com'
-      assert_includes rendered, 'try_files $uri $uri/ @frontend_spa'
+      assert_includes rendered, 'error_page 404 =200 /index.html'
       assert_includes rendered, 'proxy_pass http://127.0.0.1:3000'
     end
   end
