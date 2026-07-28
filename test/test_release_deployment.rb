@@ -297,10 +297,13 @@ class ReleaseDeploymentTest < Minitest::Test
   end
 
   def test_smoke失敗時はメンテナンスを維持して切り戻す
-    release, = build_release(smoke: Smoke.new(fail: true))
+    health = Health.new
+    release, = build_release(smoke: Smoke.new(fail: true), health: health)
     assert_raises(MitsubachiInfra::Error) { deploy(release) }
     assert File.exist?(@maintenance_path)
     assert_equal 'old', File.basename(File.realpath(File.join(@backend, 'current')))
+    assert_equal({ status: ['ready'] }, health.calls.first.last.fetch(:expected_json))
+    assert_equal({ status: %w[ready ok] }, health.calls.last.last.fetch(:expected_json))
   end
 
   def test_smoke認証情報生成失敗時は切り替えずメンテナンスを維持する
@@ -316,7 +319,8 @@ class ReleaseDeploymentTest < Minitest::Test
 
   def test_全工程成功時だけメンテナンスを解除しDBのdownやrestoreを実行しない
     migration = Migration.new
-    release, runner = build_release(migration: migration)
+    health = Health.new
+    release, runner = build_release(migration: migration, health: health)
     result = deploy(release)
     refute File.exist?(@maintenance_path)
     assert_equal 'succeeded', result.fetch(:status)
@@ -324,6 +328,7 @@ class ReleaseDeploymentTest < Minitest::Test
     refute_match(/db:rollback|db:migrate:down|pg_restore/, text)
     assert_includes migration.calls, :prepare_smoke_credentials
     refute File.exist?(File.join(@backup_root, result.fetch(:release_id), '.smoke-test-credentials.json'))
+    assert_equal({ status: ['ready'] }, health.calls.fetch(0).last.fetch(:expected_json))
   end
 
   def test_dry_runではリリースの副作用が発生しない
@@ -367,23 +372,24 @@ class ReleaseDeploymentTest < Minitest::Test
         MitsubachiInfra::HealthCheck.new(logger: logger)
                                         .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
                                                                                          attempts: 1, delay: 0,
-                                                                                         expected_json: { status: %w[ready ok] })
+                                                                                         expected_json: { status: ['ready'] })
       end
     end
     with_http_response(200, '{"status":"ready"}') do
       result = MitsubachiInfra::HealthCheck.new(logger: logger)
                                            .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
                                                                                             attempts: 1, delay: 0,
-                                                                                            expected_json: { status: %w[ready ok] })
+                                                                                            expected_json: { status: ['ready'] })
       assert result.succeeded
       assert_includes logger.string, '[OK] health check passed'
     end
     with_http_response(200, '{"status":"ok"}') do
-      result = MitsubachiInfra::HealthCheck.new(logger: logger)
-                                           .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
-                                                                                            attempts: 1, delay: 0,
-                                                                                            expected_json: { status: %w[ready ok] })
-      assert result.succeeded
+      assert_raises(MitsubachiInfra::Error) do
+        MitsubachiInfra::HealthCheck.new(logger: logger)
+                                        .check!('http://127.0.0.1:3000/api/health/ready', host: 'api.example.com',
+                                                                                         attempts: 1, delay: 0,
+                                                                                         expected_json: { status: ['ready'] })
+      end
     end
   end
 

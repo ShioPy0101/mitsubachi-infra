@@ -283,7 +283,7 @@ module MitsubachiInfra
         frontend_manager.activate(state[:previous_frontend]) if state[:previous_frontend]
         restart_services(allow_failure: true)
         reload_nginx(allow_failure: true)
-        health_check(nil)
+        health_check(nil, expected_statuses: %w[ready ok])
         report.assign(application_rollback: 'succeeded')
       rescue StandardError => rollback_error
         report.assign(application_rollback: 'failed', rollback_error: rollback_error.message)
@@ -312,8 +312,8 @@ module MitsubachiInfra
         @runner.run('systemctl', 'reload', 'nginx', allow_failure: allow_failure)
       end
 
-      def health_check(report_path)
-        @health.check!(health_url, host: @config.health_host, expected_json: { status: %w[ready ok] },
+      def health_check(report_path, expected_statuses: ['ready'])
+        @health.check!(health_url, host: @config.health_host, expected_json: { status: expected_statuses },
                                    report_path: report_path)
       end
 
