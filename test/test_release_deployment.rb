@@ -380,6 +380,28 @@ class ReleaseDeploymentTest < Minitest::Test
     assert_includes runner.deploy_commands, %w[which bundle]
   end
 
+  def test_smoke認証情報の実行用一時ファイルは終了時に削除する
+    source = @config.fetch('release').fetch('smoke_test').fetch('credentials_file')
+    output = File.join(@root, 'smoke-report.json')
+    tester = MitsubachiInfra::Deployment::SmokeTester.new(config: @config, runner: Runner.new,
+                                                          logger: StringIO.new)
+    temporary = "#{output}.credentials.#{$PROCESS_ID}"
+    File.write(source, "MEMBER_PASSWORD=secret\n")
+
+    @config.set('deploy.user', Etc.getpwuid(Process.uid).name)
+    runner = tester.instance_variable_get(:@runner)
+    runner.define_singleton_method(:deploy) do |*_command, **options|
+      path = options.fetch(:env).fetch('CREDENTIALS_FILE')
+      raise '一時認証情報が存在しない' unless File.file?(path)
+      File.write(options.fetch(:env).fetch('OUTPUT'), JSON.generate(succeeded: true))
+      MitsubachiInfra::CommandRunner::Result.new(stdout: '', stderr: '', status: 0)
+    end
+    tester.run!(release_id: 'release-id', output: output)
+
+    refute File.exist?(temporary)
+    assert File.exist?(source)
+  end
+
   private
 
   def with_http_status(status, &block)

@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'json'
+require 'etc'
+require 'fileutils'
 require 'net/http'
 require 'uri'
 require 'yaml'
@@ -17,11 +19,14 @@ module MitsubachiInfra
 
       def run!(release_id:, output:)
         settings = @config.fetch('release').fetch('smoke_test')
-        validate_credentials!(settings.fetch('credentials_file')) unless @runner.dry_run
+        source_credentials = settings.fetch('credentials_file')
+        validate_credentials!(source_credentials) unless @runner.dry_run
+        runtime_credentials = @runner.dry_run ? source_credentials : materialize_runtime_credentials(source_credentials,
+                                                                                                      output)
         env = {
           'RELEASE_ID' => release_id,
           'OUTPUT' => output,
-          'CREDENTIALS_FILE' => settings.fetch('credentials_file'),
+          'CREDENTIALS_FILE' => runtime_credentials,
           'BASE_URL' => internal_frontend_url,
           'API_BASE_URL' => internal_api_url,
           'FRONTEND_HOST' => @config.frontend_host,
@@ -45,6 +50,8 @@ module MitsubachiInfra
         end
         write_report(output, report)
         report
+      ensure
+        FileUtils.rm_f(runtime_credentials) if defined?(runtime_credentials) && runtime_credentials != source_credentials
       end
 
       private
@@ -52,6 +59,17 @@ module MitsubachiInfra
       def validate_credentials!(path)
         raise Error, "smoke-test credentials are missing: #{path}" unless File.file?(path)
         raise Error, "smoke-test credentials must be mode 0600: #{path}" unless (File.stat(path).mode & 0o077).zero?
+      end
+
+      def materialize_runtime_credentials(source, output)
+        path = "#{output}.credentials.#{$PROCESS_ID}"
+        File.write(path, File.binread(source), mode: 'wb', perm: 0o600)
+        account = Etc.getpwnam(@config.fetch('deploy').fetch('user'))
+        File.chown(account.uid, account.gid, path)
+        path
+      rescue StandardError
+        FileUtils.rm_f(path) if path
+        raise
       end
 
       def write_report(path, report)
