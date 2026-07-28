@@ -255,6 +255,9 @@ module MitsubachiInfra
     def install_env_files
       rails_path = @config.fetch('paths').fetch('rails_env')
       frontend_path = @config.fetch('paths').fetch('frontend_env')
+      smoke = @config.fetch('release').fetch('smoke_test')
+      credentials_path = smoke.fetch('credentials_file')
+      manifest_path = smoke.fetch('removed_manifest')
       unless File.exist?(rails_path) || @runner.dry_run
         atomic_write(rails_path, EnvTemplates.rails_env(@config), owner: 'root', group: deploy_user,
                                                                   mode: '0640')
@@ -266,6 +269,15 @@ module MitsubachiInfra
       else
         atomic_write(frontend_path, EnvTemplates.frontend_env(@config), owner: 'root', group: deploy_user,
                                                                   mode: '0640')
+      end
+      unless File.exist?(credentials_path)
+        atomic_write(credentials_path,
+                     "# 本番smoke testの認証情報をKEY=value形式で設定してください。\n",
+                     owner: 'root', group: 'root', mode: '0600')
+      end
+      unless File.exist?(manifest_path)
+        atomic_write(manifest_path, "removed_endpoints: []\nremoved_pages: []\n",
+                     owner: 'root', group: 'root', mode: '0644')
       end
     end
 
