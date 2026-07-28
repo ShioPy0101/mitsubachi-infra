@@ -24,11 +24,12 @@ require 'mitsubachi_infra/lock'
 class ReleaseDeploymentTest < Minitest::Test
   class Runner
     attr_accessor :dry_run
-    attr_reader :commands
+    attr_reader :commands, :deploy_commands
 
     def initialize(dry_run: false, failures: {})
       @dry_run = dry_run
       @commands = []
+      @deploy_commands = []
       @failures = failures
     end
 
@@ -41,6 +42,7 @@ class ReleaseDeploymentTest < Minitest::Test
     end
 
     def deploy(*command, **options)
+      @deploy_commands << command.flatten.map(&:to_s)
       run(*command, **options)
     end
   end
@@ -367,6 +369,15 @@ class ReleaseDeploymentTest < Minitest::Test
     assert_includes rendered, 'location = /api/health/ready'
     readiness = rendered[/location = \/api\/health\/ready \{.*?\n    \}/m]
     refute_includes readiness, 'return 503'
+  end
+
+  def test_preflightはbundleをdeployユーザー環境で確認する
+    runner = Runner.new
+    preflight = MitsubachiInfra::Deployment::Preflight.new(config: @config, runner: runner,
+                                                           logger: StringIO.new)
+    preflight.send(:require_deploy_command!, 'bundle')
+
+    assert_includes runner.deploy_commands, %w[which bundle]
   end
 
   private
