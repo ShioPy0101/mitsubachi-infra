@@ -53,7 +53,7 @@ module MitsubachiInfra
         raise Error, 'frontend rollback candidate not found' if target.nil?
 
         manager.activate(target) unless @runner.dry_run
-        @health.check!(frontend_health_url, dry_run: @runner.dry_run)
+        @health.check!(frontend_health_url, host: frontend_health_host, dry_run: @runner.dry_run)
       end
 
       def backend_health_url
@@ -61,7 +61,11 @@ module MitsubachiInfra
       end
 
       def frontend_health_url
-        @config.public? ? "https://#{@config.frontend_host}/" : "http://#{@config.fetch('server_ip')}/"
+        @config.public? ? 'http://127.0.0.1/' : "http://#{@config.fetch('server_ip')}/"
+      end
+
+      def frontend_health_host
+        @config.public? ? @config.frontend_host : nil
       end
     end
   end

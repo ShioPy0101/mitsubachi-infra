@@ -2447,6 +2447,21 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  def test_Certbot後の疎通確認は外向きURLではなくlocalhostを使用する
+    config = production_config('/tmp/mitsubachi-test')
+    health = FakeHealth.new
+    certbot = certbot_for(config, runner: HttpsRunner.new, health: health)
+
+    certbot.send(:https_health_check)
+
+    assert_equal 'http://127.0.0.1/', health.calls[0][0]
+    assert_equal 'mitsubachi.shiosalt.com', health.calls[0][1][:host]
+    assert_equal 'http://127.0.0.1:3000/api/health/live', health.calls[1][0]
+    assert_equal 'mitsubachi-api.shiosalt.com', health.calls[1][1][:host]
+    assert_equal 'http://127.0.0.1:3000/api/health/ready', health.calls[2][0]
+    assert_equal 'mitsubachi-api.shiosalt.com', health.calls[2][1][:host]
+  end
+
   def test_health_check_sends_public_host_header
     request = capture_health_request do |url|
       MitsubachiInfra::HealthCheck.new(logger: StringIO.new).check!(url, host: 'mitsubachi-api.shiosalt.com')
@@ -2543,6 +2558,16 @@ class MitsubachiInfraTest < Minitest::Test
                                                          health: FakeHealth.new)
 
     assert_equal 'http://127.0.0.1:3000/api/health/ready', rollback.send(:backend_health_url)
+  end
+
+  def test_frontend切り戻しのhealth_checkはlocalhostとfrontend_hostを使用する
+    config = production_config('/tmp/mitsubachi-test')
+    rollback = MitsubachiInfra::Deployment::Rollback.new(config: config, runner: RecordingRunner.new,
+                                                         systemd: MitsubachiInfra::Systemd.new(runner: RecordingRunner.new),
+                                                         health: FakeHealth.new)
+
+    assert_equal 'http://127.0.0.1/', rollback.send(:frontend_health_url)
+    assert_equal 'mitsubachi.shiosalt.com', rollback.send(:frontend_health_host)
   end
 
   def test_production_backend_health_check_uses_internal_url
