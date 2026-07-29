@@ -28,6 +28,10 @@ def replace_runtime_paths(content, directory, certificate, certificate_key)
     .gsub(%r{/var/log/nginx/[a-zA-Z0-9_.-]+}, File.join(directory, 'nginx-test.log'))
     .gsub(%r{/etc/letsencrypt/live/[^/]+/fullchain\.pem}, certificate)
     .gsub(%r{/etc/letsencrypt/live/[^/]+/privkey\.pem}, certificate_key)
+    .gsub(/listen 80(?=[ ;])/, 'listen 18080')
+    .gsub(/listen \[::\]:80(?=[ ;])/, 'listen [::]:18080')
+    .gsub(/listen 443(?=[ ;])/, 'listen 18443')
+    .gsub(/listen \[::\]:443(?=[ ;])/, 'listen [::]:18443')
 end
 
 Dir.mktmpdir('mitsubachi-nginx-ci-') do |root|
