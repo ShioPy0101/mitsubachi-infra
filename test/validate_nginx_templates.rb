@@ -59,6 +59,7 @@ Dir.mktmpdir('mitsubachi-nginx-ci-') do |root|
       http {
         include #{mime_types};
         default_type application/octet-stream;
+        access_log off;
         include #{File.join(directory, 'logging.conf')};
         include #{File.join(directory, 'site.conf')};
       }
