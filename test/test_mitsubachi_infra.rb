@@ -1919,6 +1919,12 @@ class MitsubachiInfraTest < Minitest::Test
           'rails_env' => File.join(dir, 'etc', 'rails.env'),
           'frontend_env' => File.join(dir, 'etc', 'frontend.env'),
           'server_id' => File.join(dir, 'etc', 'server-id')
+        },
+        'release' => {
+          'smoke_test' => {
+            'credentials_file' => File.join(dir, 'etc', 'smoke-test.env'),
+            'removed_manifest' => File.join(dir, 'etc', 'removed-routes.yml')
+          }
         }
       ))
       runner = NodeRunner.new(node_stdout: 'v22.0.0')
