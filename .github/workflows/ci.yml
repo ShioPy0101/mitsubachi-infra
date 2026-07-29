@@ -5,12 +5,18 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  source-validation:
+    name: ソース・テンプレート検証
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -23,8 +29,28 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Nginxと検査ツールを導入
-        run: sudo apt-get update && sudo apt-get install --yes nginx ripgrep
+      - name: ShellCheckを導入
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+
+      - name: 全ソースとテンプレートを検証
+        run: ruby test/validate_source_files.rb
+
+  tests:
+    name: Ruby・シェルテスト
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: ソースコードを取得
+        uses: actions/checkout@v4
+
+      - name: Rubyを準備
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: テスト依存ツールを導入
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
 
       - name: Rubyテストを実行
         run: ruby -Itest test/test_mitsubachi_infra.rb
@@ -35,10 +61,22 @@ jobs:
       - name: シェル統合テストを実行
         run: bash test/run_shell_tests.sh
 
-      - name: Nginx生成設定を実バイナリで検証
-        run: ruby test/validate_nginx_templates.rb
+  nginx-validation:
+    name: Nginx生成設定検証
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
-      - name: シェル構文を検証
-        run: |
-          bash -n bin/capture-upload-load
-          bash -n test/run_shell_tests.sh
+    steps:
+      - name: ソースコードを取得
+        uses: actions/checkout@v4
+
+      - name: Rubyを準備
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Nginxを導入
+        run: sudo apt-get update && sudo apt-get install --yes nginx
+
+      - name: LAN・公開HTTP・公開HTTPS設定を検証
+        run: ruby test/validate_nginx_templates.rb
