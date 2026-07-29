@@ -11,6 +11,7 @@ class UploadObservabilityTest < Minitest::Test
     logging = File.read(File.join(ROOT, 'templates/nginx/conf.d/mitsubachi-logging.conf.erb'))
     assert_includes logging, 'log_format mitsubachi_upload_json escape=json'
     assert_includes logging, 'map $http_x_upload_session_id $mitsubachi_upload_session_id'
+    assert_includes logging, '"~^[0-9a-fA-F]{8}'
     assert_includes logging, '"uri":"$uri"'
     refute_includes logging, '$request_uri'
     refute_includes logging, '$http_authorization'
