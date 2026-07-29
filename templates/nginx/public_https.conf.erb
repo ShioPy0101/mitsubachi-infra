@@ -127,6 +127,7 @@ server {
         proxy_send_timeout 3600s;
 
         access_log /var/log/nginx/mitsubachi-api-diagnostic.log mitsubachi_diagnostic;
+        access_log /var/log/nginx/mitsubachi_upload_access.jsonl mitsubachi_upload_json if=$mitsubachi_is_upload_request;
     }
 
     location /internal/storage/drive_items/ {
