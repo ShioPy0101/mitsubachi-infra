@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: ソースコードを取得
+        uses: actions/checkout@v4
+
+      - name: Rubyを準備
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Nginxと検査ツールを導入
+        run: sudo apt-get update && sudo apt-get install --yes nginx ripgrep
+
+      - name: Rubyテストを実行
+        run: ruby -Itest test/test_mitsubachi_infra.rb
+
+      - name: アップロード観測テストを実行
+        run: ruby -Itest test/upload_observability_test.rb
+
+      - name: シェル統合テストを実行
+        run: bash test/run_shell_tests.sh
+
+      - name: Nginx生成設定を実バイナリで検証
+        run: ruby test/validate_nginx_templates.rb
+
+      - name: シェル構文を検証
+        run: |
+          bash -n bin/capture-upload-load
+          bash -n test/run_shell_tests.sh
