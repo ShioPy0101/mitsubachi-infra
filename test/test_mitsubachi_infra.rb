@@ -2322,6 +2322,9 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem'
     assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
     assert_includes rendered, 'access_log /var/log/nginx/mitsubachi-api-diagnostic.log mitsubachi_diagnostic;'
+    assert_includes rendered, 'add_header Access-Control-Allow-Origin "https://mitsubachi.shiosalt.com" always;'
+    assert_includes rendered, 'add_header Access-Control-Allow-Credentials "true" always;'
+    assert_includes rendered, 'add_header Access-Control-Expose-Headers "Content-Disposition" always;'
   end
 
   def test_nginx_conf_template_preserves_ubuntu_baseline_with_configured_error_log_level

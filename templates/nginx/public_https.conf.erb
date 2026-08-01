@@ -135,6 +135,12 @@ server {
         alias /mnt/external-hdd/mitsubachi/files/drive_items/;
         sendfile on;
         tcp_nopush on;
+        # X-Accel-Redirect 後はこの location が最終レスポンスを生成するため、
+        # Rails で許可した公開 frontend 向け CORS 契約をここでも維持する。
+        add_header Access-Control-Allow-Origin "https://<%= config.frontend_host %>" always;
+        add_header Access-Control-Allow-Credentials "true" always;
+        add_header Access-Control-Expose-Headers "Content-Disposition" always;
+        add_header Vary "Origin" always;
         add_header X-Content-Type-Options nosniff always;
     }
 }
