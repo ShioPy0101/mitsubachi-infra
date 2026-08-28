@@ -10,3 +10,29 @@ log_format mitsubachi_diagnostic
   'upstream_connect_time="$upstream_connect_time" '
   'upstream_header_time="$upstream_header_time" '
   'upstream_response_time="$upstream_response_time"';
+
+# UUID以外を空文字へ正規化し、クライアント入力でJSONログを汚染させない。
+map $http_x_upload_session_id $mitsubachi_upload_session_id {
+  default "";
+  "~^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$" $http_x_upload_session_id;
+}
+
+map "$request_method:$uri" $mitsubachi_is_upload_request {
+  default 0;
+  ~^POST:/api/v1/(organizations/[0-9]+/)?drive_items$ 1;
+}
+
+log_format mitsubachi_upload_json escape=json
+  '{"time":"$time_iso8601",'
+  '"request_id":"$request_id",'
+  '"upload_session_id":"$mitsubachi_upload_session_id",'
+  '"request_method":"$request_method",'
+  '"uri":"$uri",'
+  '"status":$status,'
+  '"request_length":$request_length,'
+  '"bytes_sent":$bytes_sent,'
+  '"request_time":$request_time,'
+  '"upstream_connect_time":"$upstream_connect_time",'
+  '"upstream_header_time":"$upstream_header_time",'
+  '"upstream_response_time":"$upstream_response_time",'
+  '"connection_requests":$connection_requests}';

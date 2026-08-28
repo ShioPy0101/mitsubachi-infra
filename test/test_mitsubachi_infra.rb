@@ -1919,6 +1919,12 @@ class MitsubachiInfraTest < Minitest::Test
           'rails_env' => File.join(dir, 'etc', 'rails.env'),
           'frontend_env' => File.join(dir, 'etc', 'frontend.env'),
           'server_id' => File.join(dir, 'etc', 'server-id')
+        },
+        'release' => {
+          'smoke_test' => {
+            'credentials_file' => File.join(dir, 'etc', 'smoke-test.env'),
+            'removed_manifest' => File.join(dir, 'etc', 'removed-routes.yml')
+          }
         }
       ))
       runner = NodeRunner.new(node_stdout: 'v22.0.0')
@@ -2320,6 +2326,9 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, 'access_log /var/log/nginx/mitsubachi-api-diagnostic.log mitsubachi_diagnostic;'
     assert_includes rendered, 'location /internal/previews/'
     assert_includes rendered, 'alias /mnt/external-hdd/mitsubachi/files/previews/;'
+    assert_includes rendered, 'add_header Access-Control-Allow-Origin "https://mitsubachi.shiosalt.com" always;'
+    assert_includes rendered, 'add_header Access-Control-Allow-Credentials "true" always;'
+    assert_includes rendered, 'add_header Access-Control-Expose-Headers "Content-Disposition" always;'
   end
 
   def test_nginx_conf_template_preserves_ubuntu_baseline_with_configured_error_log_level

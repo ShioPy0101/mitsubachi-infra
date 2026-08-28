@@ -36,6 +36,7 @@ server {
     }
 
     location /api/ {
+        access_log /var/log/nginx/mitsubachi_upload_access.jsonl mitsubachi_upload_json if=$mitsubachi_is_upload_request;
         set $mitsubachi_maintenance "";
         if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
         if ($remote_addr = 127.0.0.1) { set $mitsubachi_maintenance ""; }

@@ -1,0 +1,13 @@
+/var/log/nginx/mitsubachi_upload_access.jsonl {
+  daily
+  rotate 30
+  compress
+  delaycompress
+  missingok
+  notifempty
+  create 0640 www-data adm
+  sharedscripts
+  postrotate
+    [ ! -f /run/nginx.pid ] || kill -USR1 $(cat /run/nginx.pid)
+  endscript
+}
