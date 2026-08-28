@@ -136,4 +136,13 @@ server {
         tcp_nopush on;
         add_header X-Content-Type-Options nosniff always;
     }
+
+    # Public share も Rails の share 認可後にだけ内部転送する。
+    location /internal/previews/ {
+        internal;
+        alias /mnt/external-hdd/mitsubachi/files/previews/;
+        sendfile on;
+        tcp_nopush on;
+        add_header X-Content-Type-Options nosniff always;
+    }
 }

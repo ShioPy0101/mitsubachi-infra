@@ -64,6 +64,15 @@ server {
         add_header X-Content-Type-Options nosniff always;
     }
 
+    # Rails の認可を迂回して Preview cache を直接取得できないよう internal に限定する。
+    location /internal/previews/ {
+        internal;
+        alias /mnt/external-hdd/mitsubachi/files/previews/;
+        sendfile on;
+        tcp_nopush on;
+        add_header X-Content-Type-Options nosniff always;
+    }
+
     location / {
         set $mitsubachi_maintenance "";
         if (-f <%= config.fetch("release").fetch("maintenance_flag") %>) { set $mitsubachi_maintenance enabled; }
