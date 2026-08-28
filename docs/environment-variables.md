@@ -19,6 +19,11 @@
 | `SECRET_KEY_BASE` | yes | yes | redacted | cookies/signing | restart API/jobs |
 | `RESEND_API_KEY` | yes | yes | redacted | Rails mail delivery | restart API/jobs |
 | `MAIL_FROM` | yes | no | `Mitsubachi <no-reply@shiosalt.com>` | verified sender | restart API/jobs |
+| `MEDIA_FFMPEG_PATH` | no | no | `ffmpeg` | 動画 Preview 生成に使う FFmpeg。未指定時も `ffmpeg` を PATH から解決 | restart API |
+
+`MEDIA_FFMPEG_PATH` は HTTP 入力ではなく、管理者が Rails service の実行環境へ
+設定する executable 名または path です。通常の Ubuntu package 配置では未指定の
+まま systemd の `/usr/bin` を含む PATH から解決できます。
 
 ## Frontend: `/etc/mitsubachi/frontend.env`
 
