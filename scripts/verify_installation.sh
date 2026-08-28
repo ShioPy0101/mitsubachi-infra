@@ -83,6 +83,7 @@ fi
 set_stage "storage"
 check "外付け HDD が mount されている" mountpoint -q "${EXTERNAL_HDD}"
 check "storage directory が存在する" test -d "${DRIVE_ITEMS_ROOT}"
+check "preview cache directory が存在する" test -d "${PREVIEW_ROOT}"
 check "外付け HDD が read/write 可能" require_filesystem_rw "${EXTERNAL_HDD}"
 df -h -- "${EXTERNAL_HDD}" || true
 if id deploy >/dev/null 2>&1; then pass "deploy user が存在する"; else fail "deploy user が存在する"; fi
@@ -91,6 +92,16 @@ if sudo -n -u deploy test -w "${DRIVE_ITEMS_ROOT}" >/dev/null 2>&1; then
   pass "deploy は storage に書き込める"
 else
   warn "deploy 書き込み確認を実行できない、または失敗しました。sudo で実行してください。"
+fi
+if sudo -n -u deploy test -w "${PREVIEW_ROOT}" >/dev/null 2>&1; then
+  pass "deploy は preview cache に書き込める"
+else
+  warn "deploy の preview cache 書き込み確認を実行できない、または失敗しました。sudo で実行してください。"
+fi
+if sudo -n -u www-data test -r "${PREVIEW_ROOT}" >/dev/null 2>&1; then
+  pass "www-data は preview cache を読める"
+else
+  warn "www-data の preview cache 読み取り確認を実行できない、または失敗しました。sudo で実行してください。"
 fi
 if sudo -n -u www-data test -r "${DRIVE_ITEMS_ROOT}" >/dev/null 2>&1; then
   pass "www-data は storage を読める"
@@ -154,11 +165,18 @@ case "${code}" in
   403|404) pass "internal URI 直接アクセスは拒否されています (${code})" ;;
   *) warn "internal URI 直接アクセスの応答が ${code} です。Nginx 経由では 403 または 404 を想定します。" ;;
 esac
+preview_code="$(curl -sS -H "Host: ${HEALTH_HOST}" -o /dev/null -w '%{http_code}' "${HEALTH_BASE}/internal/previews/does-not-exist" || true)"
+case "${preview_code}" in
+  403|404) pass "internal preview URI 直接アクセスは拒否されています (${preview_code})" ;;
+  *) warn "internal preview URI 直接アクセスの応答が ${preview_code} です。Nginx 経由では 403 または 404 を想定します。" ;;
+esac
 
 set_stage "consistency"
 if [[ -f "${REPO_ROOT}/nginx/mitsubachi-local.conf" ]]; then
   if grep -F 'location /internal/storage/drive_items/' "${REPO_ROOT}/nginx/mitsubachi-local.conf" >/dev/null; then pass "Nginx internal URI は Rails 契約と一致"; else fail "Nginx internal URI は Rails 契約と一致"; fi
   if grep -F 'alias /mnt/external-hdd/mitsubachi/files/drive_items/;' "${REPO_ROOT}/nginx/mitsubachi-local.conf" >/dev/null; then pass "Nginx alias は FILE_STORAGE_ROOT と一致"; else fail "Nginx alias は FILE_STORAGE_ROOT と一致"; fi
+  if grep -F 'location /internal/previews/' "${REPO_ROOT}/nginx/mitsubachi-local.conf" >/dev/null; then pass "Nginx preview internal URI は Rails 契約と一致"; else fail "Nginx preview internal URI は Rails 契約と一致"; fi
+  if grep -F 'alias /mnt/external-hdd/mitsubachi/files/previews/;' "${REPO_ROOT}/nginx/mitsubachi-local.conf" >/dev/null; then pass "Nginx preview alias は PREVIEW_ROOT と一致"; else fail "Nginx preview alias は PREVIEW_ROOT と一致"; fi
 fi
 if [[ -f /etc/nginx/sites-available/mitsubachi.conf ]]; then
   if grep -F "proxy_pass http://127.0.0.1:3000;" /etc/nginx/sites-available/mitsubachi.conf >/dev/null; then pass "Nginx proxy_pass は Puma 3000 と一致"; else fail "Nginx proxy_pass は Puma 3000 と一致"; fi

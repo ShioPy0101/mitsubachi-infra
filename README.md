@@ -31,6 +31,7 @@ docs/commands.md
 docs/production-deployment.md
 docs/environment-variables.md
 docs/mail-delivery.md
+docs/media-previews.md
 docs/troubleshooting.md
 ```
 
@@ -115,6 +116,16 @@ browser
   -> X-Accel-Redirect: /internal/storage/drive_items/:storage_key
   -> Nginx internal location
   -> /mnt/external-hdd/mitsubachi/files/drive_items/:storage_key
+```
+
+thumbnail delivery:
+
+```text
+browser
+  -> Rails authentication / organization or share authorization
+  -> X-Accel-Redirect: /internal/previews/:derived-cache-key
+  -> Nginx internal location
+  -> /mnt/external-hdd/mitsubachi/files/previews/:derived-cache-key
 ```
 
 Rails/Puma の `127.0.0.1:3000` と PostgreSQL の `5432` は LAN に公開しません。LAN client から見える入口は Nginx の `:80/:443` だけです。

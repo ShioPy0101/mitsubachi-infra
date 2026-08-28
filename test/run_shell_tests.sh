@@ -54,6 +54,20 @@ grep -F 'https must be run as root' /tmp/mitsubachi-test.err >/dev/null || fail 
 run_expect_success "legacy scripts still expose help" bash "${ROOT}/scripts/deploy_api.sh" --help
 run_expect_success "rollback legacy help" bash "${ROOT}/scripts/rollback_api.sh" --help
 run_expect_success "backup postgres legacy help" bash "${ROOT}/scripts/backup_postgres.sh" --help
+run_expect_success "media tools check succeeds for executable overrides" env \
+  MEDIA_FFMPEG_PATH=/usr/bin/true \
+  MEDIA_FFPROBE_PATH=/usr/bin/true \
+  MEDIA_VIPS_PATH=/usr/bin/true \
+  bash "${ROOT}/scripts/check-media-tools.sh"
+run_expect_failure "media tools check reports a missing ffmpeg" env \
+  MEDIA_FFMPEG_PATH=/definitely-missing/ffmpeg \
+  MEDIA_FFPROBE_PATH=/usr/bin/true \
+  MEDIA_VIPS_PATH=/usr/bin/true \
+  bash "${ROOT}/scripts/check-media-tools.sh"
+grep -F 'ERROR: ffmpeg is not executable' /tmp/mitsubachi-test.err >/dev/null || fail "missing ffmpeg error is clear"
+if rg -n 'apt(-get)? |sudo ' "${ROOT}/scripts/check-media-tools.sh" >/tmp/mitsubachi-test.out 2>/tmp/mitsubachi-test.err; then
+  fail "media tools check must not install or mutate OS packages"
+fi
 
 grep -F 'EnvironmentFile=<%= @config.fetch("paths").fetch("rails_env") %>' "${ROOT}/templates/systemd/mitsubachi-api.service.erb" >/dev/null || fail "systemd template reads rails env"
 grep -F 'bundle exec bin/jobs' "${ROOT}/templates/systemd/mitsubachi-jobs.service.erb" >/dev/null || fail "worker systemd template runs bin/jobs"
@@ -63,6 +77,11 @@ grep -F 'try_files $uri $uri/ =404;' "${ROOT}/templates/nginx/public_https.conf.
 # shellcheck disable=SC2016
 grep -F 'error_page 404 =200 /index.html;' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan template maps frontend deep-link 404 to SPA index"
 grep -F 'location /api/' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan keeps api proxy"
+grep -F 'location /internal/previews/' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx lan has internal preview delivery"
+grep -F 'alias /mnt/external-hdd/mitsubachi/files/previews/;' "${ROOT}/templates/nginx/lan.conf.erb" >/dev/null || fail "nginx preview alias matches cache root"
+grep -F 'PREVIEW_ROOT="${PREVIEW_ROOT:-${FILE_STORAGE_ROOT}/previews}"' "${ROOT}/scripts/lib/common.sh" >/dev/null || fail "preview cache root derives from file storage root"
+grep -F '"${PREVIEW_ROOT}"' "${ROOT}/scripts/bootstrap_ubuntu.sh" >/dev/null || fail "bootstrap creates preview cache idempotently"
+grep -F 'ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/previews' "${ROOT}/templates/systemd/mitsubachi-api.service.erb" >/dev/null || fail "systemd verifies writable preview cache"
 grep -F 'certbot' "${ROOT}/lib/mitsubachi_infra/certbot.rb" >/dev/null || fail "certbot integration exists"
 grep -F 'Open3.capture3' "${ROOT}/lib/mitsubachi_infra/command_runner.rb" >/dev/null || fail "CommandRunner uses Open3"
 

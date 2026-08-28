@@ -384,12 +384,12 @@ require_mountpoint "${EXTERNAL_HDD}"
 require_filesystem_rw "${EXTERNAL_HDD}"
 ensure_dir "root:mitsubachi-files" 0750 "${MITSUBACHI_HDD_ROOT}"
 ensure_dir "deploy:mitsubachi-files" 0750 \
-  "${FILE_STORAGE_ROOT}" "${DRIVE_ITEMS_ROOT}" \
+  "${FILE_STORAGE_ROOT}" "${DRIVE_ITEMS_ROOT}" "${PREVIEW_ROOT}" \
   "${MITSUBACHI_HDD_ROOT}/tmp" "${BULK_DOWNLOAD_TMP}"
 ensure_dir "root:root" 0700 \
   "${MITSUBACHI_HDD_ROOT}/backups" "${POSTGRES_BACKUP_DIR}" "${STORAGE_BACKUP_DIR}"
-chmod 0750 "${FILE_STORAGE_ROOT}" "${DRIVE_ITEMS_ROOT}" "${MITSUBACHI_HDD_ROOT}/tmp" "${BULK_DOWNLOAD_TMP}"
-chmod g+s "${FILE_STORAGE_ROOT}" "${DRIVE_ITEMS_ROOT}" "${MITSUBACHI_HDD_ROOT}/tmp" "${BULK_DOWNLOAD_TMP}"
+chmod 0750 "${FILE_STORAGE_ROOT}" "${DRIVE_ITEMS_ROOT}" "${PREVIEW_ROOT}" "${MITSUBACHI_HDD_ROOT}/tmp" "${BULK_DOWNLOAD_TMP}"
+chmod g+s "${FILE_STORAGE_ROOT}" "${DRIVE_ITEMS_ROOT}" "${PREVIEW_ROOT}" "${MITSUBACHI_HDD_ROOT}/tmp" "${BULK_DOWNLOAD_TMP}"
 
 set_stage "optional version discovery"
 log "Rails API リポジトリから Ruby / Bundler version を必要に応じて検出します。"

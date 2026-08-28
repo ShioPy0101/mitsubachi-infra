@@ -2305,6 +2305,8 @@ class MitsubachiInfraTest < Minitest::Test
     refute_includes rendered, 'location @frontend_spa {'
     assert_includes rendered, 'proxy_set_header X-Forwarded-Host $host;'
     assert_includes rendered, 'location /internal/storage/drive_items/'
+    assert_includes rendered, 'location /internal/previews/'
+    assert_includes rendered, 'alias /mnt/external-hdd/mitsubachi/files/previews/;'
     assert_includes rendered, 'internal;'
     assert_includes rendered, 'add_header Cache-Control "no-cache";'
     assert_includes rendered, 'add_header Cache-Control "public, max-age=31536000, immutable";'
@@ -2322,6 +2324,8 @@ class MitsubachiInfraTest < Minitest::Test
     assert_includes rendered, '/etc/letsencrypt/live/mitsubachi-api.shiosalt.com/fullchain.pem'
     assert_includes rendered, 'proxy_pass http://127.0.0.1:3000;'
     assert_includes rendered, 'access_log /var/log/nginx/mitsubachi-api-diagnostic.log mitsubachi_diagnostic;'
+    assert_includes rendered, 'location /internal/previews/'
+    assert_includes rendered, 'alias /mnt/external-hdd/mitsubachi/files/previews/;'
     assert_includes rendered, 'add_header Access-Control-Allow-Origin "https://mitsubachi.shiosalt.com" always;'
     assert_includes rendered, 'add_header Access-Control-Allow-Credentials "true" always;'
     assert_includes rendered, 'add_header Access-Control-Expose-Headers "Content-Disposition" always;'
@@ -3045,6 +3049,22 @@ class MitsubachiInfraTest < Minitest::Test
       assert_includes rendered, "EnvironmentFile=#{File.join(dir, 'etc', 'rails.env')}"
       assert_includes rendered, "ExecStartPre=/usr/bin/test -f #{File.join(dir, 'rails', 'current', 'bin/jobs')}"
       assert_includes rendered, 'bundle exec bin/jobs'
+    end
+  end
+
+  def test_systemd_api_template_checks_preview_cache_without_requiring_media_tools
+    Dir.mktmpdir do |dir|
+      config = production_config(dir)
+      @config = config
+      rendered = ERB.new(File.read(File.join(ROOT, 'templates', 'systemd', 'mitsubachi-api.service.erb')),
+                         trim_mode: '-').result(binding)
+
+      assert_includes rendered, 'Environment=PATH='
+      assert_includes rendered, ':/usr/bin:'
+      assert_includes rendered, 'ExecStartPre=/usr/bin/test -d /mnt/external-hdd/mitsubachi/files/previews'
+      assert_includes rendered, 'ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/previews'
+      refute_match(/ExecStartPre=.*ffmpeg/, rendered)
+      refute_match(/ExecStartPre=.*vips/, rendered)
     end
   end
 end

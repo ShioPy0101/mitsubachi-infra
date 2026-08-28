@@ -20,6 +20,8 @@ ExecStartPre=/usr/bin/mountpoint -q /mnt/external-hdd
 ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files
 ExecStartPre=/usr/bin/test -d /mnt/external-hdd/mitsubachi/files/drive_items
 ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/drive_items
+ExecStartPre=/usr/bin/test -d /mnt/external-hdd/mitsubachi/files/previews
+ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/previews
 ExecStartPre=/usr/bin/bash -c 'tmp="$(mktemp /mnt/external-hdd/mitsubachi/files/.systemd-rw-check.XXXXXX)" && rm -f "$tmp"'
 ExecStart=/home/deploy/.rbenv/shims/bundle exec puma -e production -b tcp://127.0.0.1:3001
 Restart=on-failure
