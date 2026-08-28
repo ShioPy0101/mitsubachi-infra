@@ -16,6 +16,8 @@ Environment=PATH=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rben
 ExecStartPre=/usr/bin/test -L <%= @config.fetch("paths").fetch("rails_root") %>/current
 ExecStartPre=/usr/bin/test -f <%= @config.fetch("paths").fetch("rails_root") %>/current/Gemfile
 ExecStartPre=/usr/bin/test -f <%= @config.fetch("paths").fetch("rails_env") %>
+ExecStartPre=/usr/bin/test -d /mnt/external-hdd/mitsubachi/files/previews
+ExecStartPre=/usr/bin/test -w /mnt/external-hdd/mitsubachi/files/previews
 ExecStart=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims/bundle exec puma -e production -b tcp://127.0.0.1:<%= @config.fetch("ports").fetch("rails") %>
 Restart=on-failure
 RestartSec=5s
