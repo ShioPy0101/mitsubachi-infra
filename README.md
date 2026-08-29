@@ -820,7 +820,7 @@ RESEND_API_KEY / MAIL_FROM
 
 `/etc/mitsubachi/rails.env` の推奨 owner/group/mode は `root:deploy 0640` です。4 つの `DATABASE*_URL`、`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`RESEND_API_KEY` は標準出力やログへ表示しません。単一 `DATABASE_URL` だけの旧構成は Rails production 起動前に停止します。
 
-この Infra は Rails code を変更しません。`SESSION_COOKIE_SECURE=false` を Rails が参照していない場合、または production で `secure: true` が固定されている場合、LAN HTTP では Cookie session が送信されず認証できません。これは `mitsubachi-ruby` 側の確認・修正事項です。公開 HTTPS へ移行する時は Secure Cookie を必須へ戻してください。
+この Infra は Rails code を変更しません。`SESSION_COOKIE_SECURE=false` を Rails が参照していない場合、または production で `secure: true` が固定されている場合、LAN HTTP では Cookie session が送信されず認証できません。これは `mitsubachi-ruby` 側の確認・修正事項です。LAN mode から public mode へ切り替える場合は Secure Cookie を必須へ戻してください。
 
 Rails 側が `ALLOWED_HOSTS` を参照していない場合は、`mitsubachi-ruby` 側で `config.hosts` に `ENV["ALLOWED_HOSTS"].split(",")` を追加する必要があります。`config.hosts.clear` は使いません。確認例:
 
@@ -1311,9 +1311,9 @@ UFW
   TCP 80 は LAN CIDR のみ。SSH も LAN CIDR または明示 CIDR のみ。
 ```
 
-## 将来 HTTPS 公開へ移行する時
+## LAN HTTP 構成を Public HTTPS へ切り替える場合
 
-正式な公開 HTTPS 構成は Nginx + Certbot です。Caddy は将来案または別ブランチの設計として扱い、Nginx と Caddy を同時に 80/443 へ bind しません。
+Mitsubachi はすでに Public HTTPS を正式構成としてサポートしています。LAN HTTP 構成から切り替える場合も Nginx + Certbot を使用します。Caddy は別案として扱い、Nginx と Caddy を同時に 80/443 へ bind しません。
 
 ```text
 public DNS
