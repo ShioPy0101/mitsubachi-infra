@@ -19,7 +19,7 @@ ActionMailer::MailDeliveryJob
 ## Test Mail
 
 ```bash
-ruby exe/mitsubachi-infra mail-test --to test@example.com
+sudo mitsubachi-infra mail-test --to test@example.com
 ```
 
 このコマンドは本番 Rails の Action Mailer 設定を使います。API key は引数、ログ、frontend env に出しません。

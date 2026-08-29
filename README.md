@@ -10,7 +10,7 @@
     ↓
 利用者が本番 Ubuntu へ SSH 接続
     ↓
-本番 Ubuntu 上で ruby exe/mitsubachi-infra deploy
+本番 Ubuntu 上で sudo mitsubachi-infra deploy
     ↓
 backend / frontend を Git から取得して release deploy
 ```
@@ -135,13 +135,10 @@ Rails/Puma の `127.0.0.1:3000` と PostgreSQL の `5432` は LAN に公開し�
 通常運用の入口は Ruby 製 CLI の `mitsubachi-infra` です。Infra CLI は Rails アプリケーションの `Gemfile` や release directory に依存せず、system Ruby と Ruby 標準ライブラリだけで起動します。Rails 用 Ruby/rbenv が壊れていても、状態確認や復旧操作を始められることを優先します。
 
 ```bash
+sudo mitsubachi-infra --dry-run install
 sudo mitsubachi-infra install --interactive
-sudo mitsubachi-infra install --dry-run
 sudo mitsubachi-infra install --interactive --remove-nginx-default-site
 sudo mitsubachi-infra deploy
-sudo mitsubachi-infra deploy --all
-sudo mitsubachi-infra deploy --frontend
-sudo mitsubachi-infra deploy --backend
 sudo mitsubachi-infra deploy backend --ref main
 sudo mitsubachi-infra deploy frontend --ref main
 sudo mitsubachi-infra config show
@@ -157,7 +154,7 @@ sudo mitsubachi-infra https renew
 sudo mitsubachi-infra https status
 ```
 
-`--dry-run` は `install`、`deploy`、`rollback`、`https enable` などで利用できます。dry-run でも secret は表示しません。
+`--config`と`--dry-run`はcommandより前に置きます。`--dry-run`は`install`、`deploy`、`rollback`、`https enable`などで利用でき、secretは表示しません。初回構築、通常deploy、統合リリース、Infra自身の更新を含む用途別の正規コマンドは[Commands](docs/commands.md)を参照してください。
 
 `install`、`bootstrap`、`configure`、`deploy`、`rollback`、`https enable`、`https renew` は system 領域や service を変更するため root で実行します。非rootで実行した場合は lock 取得前に `error: install must be run as root` のようなCLIエラーで停止します。`help` と `status` はroot必須ではありません。
 
@@ -247,7 +244,7 @@ sudoedit /etc/mitsubachi/frontend.env
 # VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
 
 sudo mitsubachi-infra config show
-sudo mitsubachi-infra deploy --frontend
+sudo mitsubachi-infra deploy frontend --ref main
 
 curl -I https://mitsubachi.shiosalt.com
 curl -i https://mitsubachi-api.shiosalt.com/api/health/ready
@@ -560,7 +557,7 @@ LAN modeでは `server_ip` が必須です。コード上のデフォルトに�
 sudo install -d -o root -g deploy -m 0750 /etc/mitsubachi
 sudo install -o root -g deploy -m 0640 env/config.yml.example /etc/mitsubachi/config.yml
 sudoedit /etc/mitsubachi/config.yml
-sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install --dry-run
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
 ```
 
 `config/local.env.example` は legacy shell 用の例です。Ruby CLI の正式入力は YAML です。
@@ -568,7 +565,7 @@ sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install --dry-run
 ### 非対話実行
 
 ```bash
-sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml install
 ```
 
 非対話モードでは必須値不足時に即時失敗し、対話入力へ自動フォールバックしません。
