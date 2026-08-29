@@ -62,7 +62,7 @@ White screen with `VITE_API_BASE_URL is not configured`:
 ```bash
 sudoedit /etc/mitsubachi/frontend.env
 # VITE_API_BASE_URL=https://mitsubachi-api.shiosalt.com
-sudo mitsubachi-infra deploy --frontend
+sudo mitsubachi-infra deploy frontend --ref main
 ```
 
 For LAN verification use:
