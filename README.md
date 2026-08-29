@@ -795,8 +795,9 @@ BULK_DOWNLOAD_TMP
   Rails の通常 tmp とは分離した一括 download ZIP 作成先。
 
 SESSION_COOKIE_SECURE
-  LAN HTTP 検証では false を指定する。ただし Rails 側がこの環境変数を
-  実際に参照しているとは限らない。
+  Infra は true を生成する。現在の mitsubachi-ruby はこの環境変数を参照せず、
+  production では Secure Cookie を常に有効にするため、false へ変更しても
+  LAN HTTP で認証できるようにはならない。
 
 WEB_CONCURRENCY
   既定は 0。Puma を single mode で起動し、worker 数 1 の cluster mode
@@ -820,7 +821,7 @@ RESEND_API_KEY / MAIL_FROM
 
 `/etc/mitsubachi/rails.env` の推奨 owner/group/mode は `root:deploy 0640` です。4 つの `DATABASE*_URL`、`RAILS_MASTER_KEY`、`SECRET_KEY_BASE`、`RESEND_API_KEY` は標準出力やログへ表示しません。単一 `DATABASE_URL` だけの旧構成は Rails production 起動前に停止します。
 
-この Infra は Rails code を変更しません。`SESSION_COOKIE_SECURE=false` を Rails が参照していない場合、または production で `secure: true` が固定されている場合、LAN HTTP では Cookie session が送信されず認証できません。これは `mitsubachi-ruby` 側の確認・修正事項です。LAN mode から public mode へ切り替える場合は Secure Cookie を必須へ戻してください。
+この Infra は Rails code を変更しません。現在の `mitsubachi-ruby` は production で session Cookie の `secure`、`config.assume_ssl`、`config.force_ssl` を有効にしており、`SESSION_COOKIE_SECURE` を参照しません。そのため、`deployment_mode: lan` で Infra と Nginx を LAN HTTP 用に構成しても、認証 session は利用できません。認証を伴う LAN HTTP をサポートするには、Cookie と SSL 前提の設定を安全に切り替える実装が `mitsubachi-ruby` 側に必要です。Public HTTPS では現在の Secure Cookie と SSL 前提の設定を維持してください。
 
 Rails 側が `ALLOWED_HOSTS` を参照していない場合は、`mitsubachi-ruby` 側で `config.hosts` に `ENV["ALLOWED_HOSTS"].split(",")` を追加する必要があります。`config.hosts.clear` は使いません。確認例:
 
@@ -1326,4 +1327,4 @@ backup offsite policy
 frontend production deploy
 ```
 
-HTTPS では `SESSION_COOKIE_SECURE=true` 相当を必須に戻します。LAN HTTP のための妥協を公開環境へ持ち込まないでください。
+Public HTTPS では、現在の Rails production における Secure Cookie と SSL 前提の設定を維持します。LAN HTTP 対応を追加する場合も、公開環境の設定を弱めないでください。
