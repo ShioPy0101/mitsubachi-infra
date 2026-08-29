@@ -323,37 +323,41 @@ module MitsubachiInfra
 
     def usage
       <<~USAGE
-        Usage:
-          mitsubachi-infra bootstrap [--dry-run]
-          mitsubachi-infra configure [--dry-run]
-          mitsubachi-infra install [--interactive] [--remove-nginx-default-site] [--dry-run]
-          mitsubachi-infra deploy [all|backend|frontend] [--ref REF] [--dry-run]
-          mitsubachi-infra deploy release --backend-ref REF --frontend-ref REF [--dry-run]
-          mitsubachi-infra deploy --all|--backend|--frontend [--ref REF] [--dry-run]
-          mitsubachi-infra deploy-backend [--dry-run]
-          mitsubachi-infra deploy-frontend [--dry-run]
-          mitsubachi-infra redeploy [--dry-run]
-          mitsubachi-infra rollback [all|backend|frontend] [--dry-run]
-          mitsubachi-infra rollback-backend [--dry-run]
-          mitsubachi-infra rollback-frontend [--dry-run]
-          mitsubachi-infra production-check [--dry-run]
-          mitsubachi-infra doctor [frontend] [--dry-run]
-          mitsubachi-infra mail-test --to ADDRESS [--dry-run]
-          mitsubachi-infra status [--json]
-          mitsubachi-infra config show
-          mitsubachi-infra https check [--dry-run]
-          mitsubachi-infra https enable [--staging] [--dry-run]
-          mitsubachi-infra https renew [--dry-run]
-          mitsubachi-infra https status [--json]
-          mitsubachi-infra postgres wal-archive enable [--verify] [--root-dir PATH] [--yes] [--dry-run]
-          mitsubachi-infra postgres wal-archive disable [--yes] [--dry-run]
-          mitsubachi-infra postgres wal-archive status [--json]
-          mitsubachi-infra postgres wal-archive test [--timeout SECONDS] [--dry-run]
-          mitsubachi-infra postgres base-backup create [--checkpoint fast|spread] [--yes] [--dry-run]
-          mitsubachi-infra postgres base-backup list [--json]
-          mitsubachi-infra postgres base-backup prune [--retention-days DAYS] [--minimum COUNT] [--yes] [--dry-run]
+        Usage: mitsubachi-infra [--config PATH] [--dry-run] COMMAND [OPTIONS]
+
+        Setup and configuration:
+          mitsubachi-infra install [--interactive] [--remove-nginx-default-site]
+          mitsubachi-infra bootstrap
+          mitsubachi-infra configure
+
+        Application deployment:
+          mitsubachi-infra deploy [all|backend|frontend] [--ref REF]
+          mitsubachi-infra deploy release --backend-ref REF --frontend-ref REF
+          mitsubachi-infra rollback [all|backend|frontend]
           mitsubachi-infra maintenance enable|disable|status
           mitsubachi-infra smoke-test production --release-id ID
+
+        Inspection and operations:
+          mitsubachi-infra status [--json]
+          mitsubachi-infra config show
+          mitsubachi-infra doctor [frontend]
+          mitsubachi-infra production-check
+          mitsubachi-infra mail-test --to ADDRESS
+          mitsubachi-infra https check
+          mitsubachi-infra https enable [--staging]
+          mitsubachi-infra https renew
+          mitsubachi-infra https status [--json]
+
+        PostgreSQL backup:
+          mitsubachi-infra postgres wal-archive enable [--verify] [--root-dir PATH] [--yes]
+          mitsubachi-infra postgres wal-archive disable [--yes]
+          mitsubachi-infra postgres wal-archive status [--json]
+          mitsubachi-infra postgres wal-archive test [--timeout SECONDS]
+          mitsubachi-infra postgres base-backup create [--checkpoint fast|spread] [--yes]
+          mitsubachi-infra postgres base-backup list [--json]
+          mitsubachi-infra postgres base-backup prune [--retention-days DAYS] [--minimum COUNT] [--yes]
+
+        Global options must precede COMMAND. Use --dry-run before a mutating command.
       USAGE
     end
 
