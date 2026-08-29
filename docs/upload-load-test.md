@@ -24,7 +24,8 @@ git rev-parse HEAD
 未コミット変更がない場合だけ、対象ブランチを`git pull --ff-only origin <branch>`で取得して通常の統合デプロイとDB migrationを行います。Infraは先にdry-runし、適用後の実設定を検査します。
 
 ```bash
-sudo mitsubachi-infra install --dry-run
+cd <infra-repository>
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
 sudo nginx -t
 sudo nginx -T
 sudo systemctl cat mitsubachi-api.service

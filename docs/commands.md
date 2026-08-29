@@ -2,37 +2,58 @@
 
 すべての本番操作は、利用者が本番 Ubuntu へ SSH 接続した後、その本番 Ubuntu 上で実行します。`mitsubachi-infra` が開発 Ubuntu から SSH を自動実行する設計ではありません。
 
-正式な実行形式:
+## 実行場所ごとの入口
+
+初回構築前はPATH上のCLIがまだ存在しないため、cloneしたInfraリポジトリで次を実行します。system Ruby、Git、sudoが未導入のUbuntuでは最小bootstrapを使います。
 
 ```bash
-mitsubachi-infra <command>
+cd /path/to/mitsubachi-infra
+sudo ./scripts/install_local.sh --interactive
 ```
+
+必要なコマンドが既に揃っている場合や、更新内容を先に確認する場合はリポジトリ版CLIを直接使います。
+
+```bash
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml install
+```
+
+初回install後の日常運用は、`/usr/local/bin`へ導入されたCLIをPATHから実行します。
+
+```bash
+sudo mitsubachi-infra <command>
+```
+
+`--config`と`--dry-run`はグローバルオプションなので、正規の記載ではcommandより前に置きます。
+
+```bash
+sudo mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run deploy frontend --ref main
+```
+
+`ruby exe/mitsubachi-infra`、`deploy-backend`、`deploy-frontend`、`rollback-backend`などの旧入口・別名は通常手順では使用しません。互換用スクリプトを使う必要がある障害対応を除き、以降の用途別コマンドを使用してください。
 
 ## install / bootstrap
 
 目的: Nginx、Certbot、systemd、UFW、deploy ユーザー、directory、env 雛形を冪等に整備します。
 
 ```bash
-sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install --interactive
-sudo mitsubachi-infra --config /etc/mitsubachi/config.yml install --interactive --remove-nginx-default-site
-sudo mitsubachi-infra --config /etc/mitsubachi/config.yml bootstrap
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml install --interactive
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml install --interactive --remove-nginx-default-site
 ```
 
 root 権限が必要な操作は `sudo -n` または root 実行で行います。Git clone、bundle、npm は deploy ユーザーで実行します。
 
 `--remove-nginx-default-site` は `/etc/nginx/sites-enabled/default` が symlink の場合にその symlink だけを外します。`sites-available/default` の原本や他の Nginx 設定は変更しません。Mitsubachi の Nginx 設定は通常 `default_server` を付けません。
 
-## deploy / redeploy
+## 通常のアプリ更新
 
 backend と frontend を Git repository から取得し、release directory を新規作成して成功時だけ `current` を切り替えます。
 
 ```bash
 sudo mitsubachi-infra deploy
-sudo mitsubachi-infra deploy --all
-sudo mitsubachi-infra deploy --backend
-sudo mitsubachi-infra deploy --frontend
-sudo mitsubachi-infra deploy --backend-ref main --frontend-ref main
-sudo mitsubachi-infra redeploy
+sudo mitsubachi-infra deploy backend --ref main
+sudo mitsubachi-infra deploy frontend --ref main
 ```
 
 未 push の開発 Ubuntu 作業ツリーは本番へ入りません。本番では設定された Git repository と ref だけを取得します。
@@ -41,16 +62,15 @@ sudo mitsubachi-infra redeploy
 
 ```bash
 sudo mitsubachi-infra config show
-sudo mitsubachi-infra deploy --frontend
+sudo mitsubachi-infra --dry-run deploy frontend --ref main
+sudo mitsubachi-infra deploy frontend --ref main
 ```
 
-## deploy-backend / deploy-frontend
-
-片方だけを更新します。
+backendとfrontendを別々のrefへ固定し、DBバックアップ、migration、smoke test、release reportを一体で扱う本番リリースには統合リリースを使います。
 
 ```bash
-sudo mitsubachi-infra deploy-backend --ref main
-sudo mitsubachi-infra deploy-frontend --ref main
+sudo mitsubachi-infra --dry-run deploy release --backend-ref <commit-or-tag> --frontend-ref <commit-or-tag>
+sudo mitsubachi-infra deploy release --backend-ref <commit-or-tag> --frontend-ref <commit-or-tag>
 ```
 
 ## rollback
@@ -58,8 +78,9 @@ sudo mitsubachi-infra deploy-frontend --ref main
 直前の release へ `current` symlink を戻します。backend rollback は DB migration を戻しません。
 
 ```bash
-sudo mitsubachi-infra rollback-backend
-sudo mitsubachi-infra rollback-frontend
+sudo mitsubachi-infra --dry-run rollback backend
+sudo mitsubachi-infra rollback backend
+sudo mitsubachi-infra rollback frontend
 ```
 
 ## production-check / doctor
@@ -156,6 +177,66 @@ WAL アーカイブだけでは復旧できません。PITR にはベースバ�
 破壊的変更を行わず、予定コマンドを表示します。秘密値は表示しません。
 
 ```bash
-sudo mitsubachi-infra --dry-run bootstrap
+sudo mitsubachi-infra --dry-run install
 sudo mitsubachi-infra --dry-run deploy
 ```
+
+## Infra自身の更新
+
+アプリの`deploy`はbackend/frontendだけを更新し、Infra CLIやNginx/systemdテンプレートは更新しません。Infra自身は、本番Ubuntu上のclone済みリポジトリを管理ユーザーで更新した後、そのチェックアウトに含まれるCLIから`install`を再実行して反映します。Git操作に`sudo`は付けません。
+
+まずリポジトリと対象branchを確認します。次の`<infra-repository>`と`<branch>`は実際のclone先・リリース対象branchへ置き換えてください。
+
+```bash
+cd <infra-repository>
+git status --short
+git branch --show-current
+git remote -v
+git rev-parse HEAD
+```
+
+未コミット変更が表示された場合は停止し、内容と作成者を確認します。`git pull`、`git reset --hard`、`git clean`で破棄してはいけません。branchが正しいことを確認できた場合だけfast-forwardで取得し、反映対象commitを記録します。
+
+```bash
+git pull --ff-only origin <branch>
+git rev-parse HEAD
+git log -1 --oneline
+```
+
+`--ff-only`で失敗した場合は履歴不一致として停止し、自動merge/rebaseを行いません。取得後は、インストール済みの旧CLIではなく、更新したリポジトリの`./bin/mitsubachi-infra`を使う点が重要です。
+
+```bash
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml install
+```
+
+`install`は新しいCLI releaseを`/opt/mitsubachi-infra/releases/`へ作成し、`/opt/mitsubachi-infra/current`と`/usr/local/bin/mitsubachi-infra`をsymlinkで切り替えます。更新元CLIから新CLIへ一度だけ再実行した後、Nginx、systemd、directory、env雛形などを冪等に適用します。開発Ubuntuでのcommit/pushだけでは、この工程は実行されません。
+
+反映後はCLIの実体、生成・配置された設定、serviceを本番Ubuntuで確認します。
+
+```bash
+readlink -f /usr/local/bin/mitsubachi-infra
+readlink -f /opt/mitsubachi-infra/current
+sudo mitsubachi-infra status
+sudo mitsubachi-infra production-check
+sudo nginx -T
+sudo systemctl cat mitsubachi-api.service
+sudo systemctl cat mitsubachi-worker.service
+sudo systemctl status mitsubachi-api.service mitsubachi-worker.service nginx.service --no-pager
+```
+
+### Infra更新のロールバック
+
+適用前のcommit SHAを確認し、そのcommitを通常のGit手順でbranchまたはtagとして取得できる状態にしてから、旧commitのチェックアウトに含まれる`./bin/mitsubachi-infra install`を再実行します。`/opt/mitsubachi-infra/current`を手作業で付け替えるだけでは、既に配置されたNginx/systemd設定を戻せないため、通常のロールバック手段にはしません。
+
+```bash
+git status --short
+git branch --show-current
+git remote -v
+git switch <rollback-branch>
+git rev-parse HEAD
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run install
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml install
+```
+
+未コミット変更がある場合や、旧commitを指すbranchが用意されていない場合はここで停止します。反映後は上記と同じ`nginx -T`、`systemctl cat`、`status`、`production-check`で確認してください。アプリreleaseのrollbackとDB復元はInfra自身の更新とは別作業です。

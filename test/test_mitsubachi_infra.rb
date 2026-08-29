@@ -1313,6 +1313,22 @@ class MitsubachiInfraTest < Minitest::Test
     end
   end
 
+  define_method('test_CLIヘルプはグローバルオプションと用途別の正規コマンドを示す') do
+    stdout = StringIO.new
+    original_stdout = $stdout
+    $stdout = stdout
+
+    assert_equal 0, MitsubachiInfra::CLI.new(['help'], repo_root: ROOT).run
+
+    assert_includes stdout.string, 'mitsubachi-infra [--config PATH] [--dry-run] COMMAND [OPTIONS]'
+    assert_includes stdout.string, 'mitsubachi-infra deploy [all|backend|frontend] [--ref REF]'
+    assert_includes stdout.string, 'Global options must precede COMMAND'
+    refute_includes stdout.string, 'mitsubachi-infra deploy-backend'
+    refute_includes stdout.string, 'mitsubachi-infra rollback-backend'
+  ensure
+    $stdout = original_stdout
+  end
+
   def test_doctor_frontend_reports_missing_frontend_env_and_current_index
     Dir.mktmpdir do |dir|
       config = production_config(dir)

@@ -49,7 +49,7 @@ After changing this value, rebuild only the frontend:
 
 ```bash
 sudo mitsubachi-infra config show
-sudo mitsubachi-infra deploy --frontend
+sudo mitsubachi-infra deploy frontend --ref main
 ```
 
 ## HTTPS config: `/etc/mitsubachi/config.yml`
