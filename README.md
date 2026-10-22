@@ -1327,3 +1327,5 @@ frontend production deploy
 ```
 
 HTTPS では `SESSION_COOKIE_SECURE=true` 相当を必須に戻します。LAN HTTP のための妥協を公開環境へ持ち込まないでください。
+
+デモ専用ホストと frontend / backend のビルド・本番反映情報: [運用手順](docs/demo-and-build-info.md)。
