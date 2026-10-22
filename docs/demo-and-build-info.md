@@ -33,6 +33,35 @@ Nginx もデモ API には `/api/v1/demo/*` と liveness だけを許可し、�
 デモモード、専用 Host/Origin、別ポート、ストレージへのアクセス制限は専用 unit に定義する。
 環境ファイルでこれらを通常テナント用に再定義しない。
 
+## Cloudflare で利用者が行う操作
+
+`shiosalt.com` を通常の Cloudflare DNS 管理ゾーンとして使い、既存サービスと同じ
+公開サーバーへ直接接続する構成を想定する。Cloudflare の変更は自動実行しない。
+
+1. Cloudflare で `shiosalt.com` を開き、DNS → Records → Add record へ進む。
+2. 以下を追加する。Content は、既存本番サーバーのオリジン公開 IPv4 を指定する。
+
+| Type | Name | Content | Proxy status | TTL |
+| --- | --- | --- | --- | --- |
+| A | demo.mitsubachi | 本番サーバーの公開 IPv4 | DNS only（灰色の雲） | Auto |
+| A | mitsubachi-demo-api | 同じ公開 IPv4 | DNS only（灰色の雲） | Auto |
+
+IPv6 でも公開している場合だけ対応する AAAA を追加する。
+レコード追加手順は [Cloudflare の DNS 公式資料](https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/) を参照。
+メールアドレス入力時のリダイレクトは frontend が実行する。
+
+3. DNS の反映後、本番 Ubuntu で以下の install / HTTPS 有効化手順を実行する。
+   サーバーには外部から TCP 80/443 で到達できる必要がある。
+4. DNS only の場合は、Nginx / Certbot が取得した公開証明書で HTTPS を終端する。
+   Cloudflare のゾーン全体の SSL 設定変更はこの手順に含めない。
+
+`shiosalt.com` の通常の full setup で Universal SSL を使っている場合、
+`demo.mitsubachi.shiosalt.com` は2階層のサブドメインのため対象外となる。
+このホストを Proxied（オレンジの雲）へ変更する場合は、Advanced Certificate Manager / Total TLS
+または対象ホストを含む custom certificate の準備が必要。
+[Cloudflare の証明書対象ホストの制限](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/) を確認する。
+CNAME setup のゾーンには別の証明書ルールがあるため、上記の full setup の制約とは区別する。
+
 ## 有効化と適用
 
 `/etc/mitsubachi/config.yml` の追加設定は以下。既定では無効。
