@@ -43,13 +43,16 @@ Dir.mktmpdir('mitsubachi-nginx-ci-') do |root|
   cases = {
     'lan' => ['config.lan.yml', 'lan'],
     'public_http_challenge' => ['config.public.yml', 'public_http_challenge'],
-    'public_https' => ['config.public.yml', 'public_https']
+    'public_https' => ['config.public.yml', 'public_https'],
+    'demo_http_challenge' => ['config.public.yml', 'public_http_challenge'],
+    'demo_https' => ['config.public.yml', 'public_https']
   }
 
   cases.each do |name, (fixture, mode)|
     directory = File.join(root, name)
     FileUtils.mkdir_p(directory)
     config = MitsubachiInfra::Configuration.new(File.join(ROOT, 'test', 'fixtures', fixture))
+    config.data.fetch('demo')['enabled'] = true if name.start_with?('demo_')
     renderer = MitsubachiInfra::Nginx.new(config: config, runner: nil, repo_root: ROOT)
     logging = replace_runtime_paths(renderer.render_logging_conf, directory, certificate, certificate_key)
     site = replace_runtime_paths(renderer.render(mode: mode), directory, certificate, certificate_key)

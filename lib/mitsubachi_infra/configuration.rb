@@ -9,6 +9,7 @@ module MitsubachiInfra
     CONFIG_PATH = '/etc/mitsubachi/config.yml'
     DEFAULT = {
       'deployment_mode' => 'lan',
+      'demo' => { 'enabled' => false, 'api_port' => 3002, 'rails_env' => '/etc/mitsubachi/demo-rails.env' },
       'server_ip' => nil,
       'lan_cidr' => '192.168.1.0/24',
       'deploy' => {
@@ -157,7 +158,15 @@ module MitsubachiInfra
     end
 
     def certificate_domains
-      [frontend_host, api_host].uniq
+      ([frontend_host, api_host] + (demo_enabled? ? demo_domains : [])).uniq
+    end
+
+    def demo_enabled?
+      fetch('demo').fetch('enabled') == true
+    end
+
+    def demo_domains
+      ['demo.mitsubachi.shiosalt.com', 'mitsubachi-demo-api.shiosalt.com']
     end
 
     def frontend_host
@@ -180,6 +189,7 @@ module MitsubachiInfra
       mode = data['deployment_mode']
       raise ValidationError, 'deployment_mode must be lan or public' unless %w[lan public].include?(mode)
 
+      validate_demo!
       validate_mode_specific!
       validate_deploy!
       validate_production_schema!
@@ -357,6 +367,19 @@ module MitsubachiInfra
       raise ValidationError, 'ports.minecraft must be an array' unless minecraft.is_a?(Array)
 
       minecraft.each { |port| integer_port!(port, 'ports.minecraft') }
+    end
+
+    def validate_demo!
+      demo = data.fetch('demo')
+      raise ValidationError, 'demo.enabled must be boolean' unless [true, false].include?(demo['enabled'])
+      return unless demo_enabled?
+
+      raise ValidationError, 'demo requires public deployment mode' unless public?
+      integer_port!(demo.fetch('api_port'), 'demo.api_port')
+      raise ValidationError, 'demo API port must be separate' if data.fetch('ports').values.flatten.include?(demo['api_port'])
+      path = demo.fetch('rails_env')
+      raise ValidationError, 'demo.rails_env must be an absolute path without whitespace' unless path.match?(%r{\A/[a-zA-Z0-9_./-]+\z})
+      raise ValidationError, 'demo must use a separate environment file' if path == data.fetch('paths').fetch('rails_env')
     end
 
     def validate_public_host!(host, name = 'hostname')
