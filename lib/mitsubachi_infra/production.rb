@@ -282,10 +282,12 @@ module MitsubachiInfra
     end
 
     def install_systemd_units
-      {
+      units = {
         API_SERVICE => 'mitsubachi-api.service.erb',
         JOBS_SERVICE => 'mitsubachi-jobs.service.erb'
-      }.each do |unit, template|
+      }
+      units['mitsubachi-demo-api.service'] = 'mitsubachi-demo-api.service.erb' if @config.demo_enabled?
+      units.each do |unit, template|
         content = ERB.new(File.read(File.join(@repo_root, 'templates', 'systemd', template)),
                           trim_mode: '-').result(binding)
         atomic_write("/etc/systemd/system/#{unit}", content, owner: 'root', group: 'root', mode: '0644')
@@ -294,6 +296,7 @@ module MitsubachiInfra
       privileged('systemctl', 'enable', API_SERVICE)
       privileged('systemctl', 'restart', API_SERVICE, allow_failure: true)
       privileged('systemctl', 'enable', '--now', JOBS_SERVICE)
+      privileged('systemctl', 'enable', '--now', 'mitsubachi-demo-api.service') if @config.demo_enabled?
     end
 
     def install_nginx

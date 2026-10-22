@@ -1,0 +1,41 @@
+[Unit]
+Description=Mitsubachi Demo Rails API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<%= @config.fetch("server").fetch("deploy_user") %>
+Group=<%= @config.fetch("server").fetch("deploy_user") %>
+WorkingDirectory=<%= @config.backend_root %>/current
+EnvironmentFile=<%= @config.fetch("demo").fetch("rails_env") %>
+Environment=RAILS_ENV=production
+Environment=RACK_ENV=production
+Environment=DEMO_MODE=true
+Environment=FEATURE_DEMO_TENANT=true
+Environment=APP_HOSTS=<%= @config.demo_domains.last %>
+Environment=APP_HOST=<%= @config.demo_domains.last %>
+Environment=FRONTEND_ORIGIN=https://<%= @config.demo_domains.first %>
+Environment=FRONTEND_URL=https://<%= @config.demo_domains.first %>
+Environment=WEB_CONCURRENCY=0
+Environment=FILE_STORAGE_ROOT=/var/lib/mitsubachi-demo/files
+Environment=RBENV_ROOT=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv
+Environment=PATH=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims:/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+UnsetEnvironment=SOLID_QUEUE_IN_PUMA
+ExecStartPre=/usr/bin/test -f <%= @config.fetch("demo").fetch("rails_env") %>
+ExecStart=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims/bundle exec puma -e production -b tcp://127.0.0.1:<%= @config.fetch("demo").fetch("api_port") %>
+Restart=on-failure
+RestartSec=5s
+StateDirectory=mitsubachi-demo
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<%= @config.backend_root %>/shared/tmp <%= @config.backend_root %>/shared/log
+InaccessiblePaths=-/mnt/external-hdd/mitsubachi/files
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mitsubachi-demo-api
+
+[Install]
+WantedBy=multi-user.target

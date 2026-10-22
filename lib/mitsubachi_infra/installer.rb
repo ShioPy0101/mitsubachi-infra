@@ -51,6 +51,7 @@ module MitsubachiInfra
       templates/nginx/public_http_challenge.conf.erb
       templates/nginx/public_https.conf.erb
       templates/env/frontend.env.erb
+      templates/systemd/mitsubachi-demo-api.service.erb
       templates/systemd/mitsubachi-api.service.erb
       templates/systemd/mitsubachi-jobs.service.erb
       templates/caddy/Caddyfile.erb
@@ -283,10 +284,12 @@ module MitsubachiInfra
                     remove_default_site: remove_nginx_default_site?)
       install_systemd_unit('mitsubachi-api.service', 'mitsubachi-api.service.erb')
       install_systemd_unit('mitsubachi-worker.service', 'mitsubachi-jobs.service.erb')
+      install_systemd_unit('mitsubachi-demo-api.service', 'mitsubachi-demo-api.service.erb') if @config.demo_enabled?
       systemd.daemon_reload
       systemd.enable('mitsubachi-api.service')
       systemd.restart('mitsubachi-api.service')
       systemd.enable_now('mitsubachi-worker.service')
+      systemd.enable_now('mitsubachi-demo-api.service') if @config.demo_enabled?
       enable_https_if_possible(nginx) if @config.public?
     end
 
