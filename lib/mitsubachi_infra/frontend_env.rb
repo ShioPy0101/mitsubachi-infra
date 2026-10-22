@@ -31,7 +31,14 @@ module MitsubachiInfra
 
     def build_env
       validate!
-      { VITE_API_BASE_URL => vite_api_base_url }
+      values = { VITE_API_BASE_URL => vite_api_base_url }
+      if @config.demo_enabled?
+        flag = env.fetch('VITE_FEATURE_DEMO_TENANT', 'true')
+        raise Error, 'VITE_FEATURE_DEMO_TENANT must be true or false' unless %w[true false].include?(flag)
+
+        values['VITE_FEATURE_DEMO_TENANT'] = flag
+      end
+      values
     end
 
     def verify_build_output!(release:, output_directory:, dry_run: false)
