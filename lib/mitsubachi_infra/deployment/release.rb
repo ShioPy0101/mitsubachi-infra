@@ -309,10 +309,12 @@ module MitsubachiInfra
       def restart_services(allow_failure: false)
         @runner.run('systemctl', 'restart', release_config.fetch('api_service'), allow_failure: allow_failure)
         @runner.run('systemctl', 'restart', release_config.fetch('worker_service'), allow_failure: allow_failure)
+        @runner.run('systemctl', 'restart', 'mitsubachi-demo-api.service', allow_failure: allow_failure) if @config.demo_enabled?
         return if allow_failure
 
         @runner.run('systemctl', 'is-active', '--quiet', release_config.fetch('api_service'))
         @runner.run('systemctl', 'is-active', '--quiet', release_config.fetch('worker_service'))
+        @runner.run('systemctl', 'is-active', '--quiet', 'mitsubachi-demo-api.service') if @config.demo_enabled?
       end
 
       def reload_nginx(allow_failure: false)

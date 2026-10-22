@@ -4,6 +4,7 @@ require 'stringio'
 require 'erb'
 require_relative '../lib/mitsubachi_infra/configuration'
 require_relative '../lib/mitsubachi_infra/nginx'
+require_relative '../lib/mitsubachi_infra/deployment/release'
 
 class DemoHostsTest < Minitest::Test
   ROOT = File.expand_path('..', __dir__)
@@ -45,6 +46,25 @@ class DemoHostsTest < Minitest::Test
     assert_includes text, 'tcp://127.0.0.1:3002'
     assert_includes text, 'InaccessiblePaths=-/mnt/external-hdd/mitsubachi/files'
     assert_includes text, 'UnsetEnvironment=SOLID_QUEUE_IN_PUMA'
+  end
+
+  def test_デモ有効時だけリリースと失敗時の復旧で専用サービスも再起動する
+    commands = []
+    runner = Object.new
+    runner.define_singleton_method(:run) { |*command, **_options| commands << command }
+    release = MitsubachiInfra::Deployment::Release.allocate
+    release.instance_variable_set(:@runner, runner)
+    release.instance_variable_set(:@config, config(true))
+    release.send(:restart_services)
+    assert_includes commands, ['systemctl', 'restart', 'mitsubachi-demo-api.service']
+    assert_includes commands, ['systemctl', 'is-active', '--quiet', 'mitsubachi-demo-api.service']
+    commands.clear
+    release.send(:restart_services, allow_failure: true)
+    assert_includes commands, ['systemctl', 'restart', 'mitsubachi-demo-api.service']
+    commands.clear
+    release.instance_variable_set(:@config, config(false))
+    release.send(:restart_services)
+    refute commands.flatten.include?('mitsubachi-demo-api.service')
   end
 
   def test_通常APIと同じポートは利用できない

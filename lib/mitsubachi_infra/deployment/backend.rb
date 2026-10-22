@@ -40,6 +40,7 @@ module MitsubachiInfra
           BuildMetadata.mark_deployed(release: release, component: 'backend', dry_run: @runner.dry_run)
           manager.activate(release) unless @runner.dry_run
           @systemd.restart(SERVICE)
+          @systemd.restart('mitsubachi-demo-api.service') if @config.demo_enabled?
           @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
           manager.cleanup(protected_paths: [previous].compact)
         rescue StandardError
@@ -47,6 +48,7 @@ module MitsubachiInfra
           if previous && manager.current_release == release
             manager.activate(previous)
             @systemd.restart(SERVICE)
+            @systemd.restart('mitsubachi-demo-api.service') if @config.demo_enabled?
           end
           raise
         end

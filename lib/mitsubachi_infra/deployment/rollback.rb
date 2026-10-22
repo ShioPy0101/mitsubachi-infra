@@ -39,6 +39,7 @@ module MitsubachiInfra
         warn 'backend rollback does not roll back DB migrations'
         manager.activate(target) unless @runner.dry_run
         @systemd.restart('mitsubachi-api.service')
+        @systemd.restart('mitsubachi-demo-api.service') if @config.demo_enabled?
         @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
       end
 
