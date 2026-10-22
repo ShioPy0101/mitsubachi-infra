@@ -3,6 +3,7 @@
 require 'fileutils'
 require_relative '../rails_command'
 require_relative 'release_manager'
+require_relative 'build_metadata'
 
 module MitsubachiInfra
   module Deployment
@@ -32,9 +33,11 @@ module MitsubachiInfra
           @runner.deploy('git', "--git-dir=#{repo}", "--work-tree=#{release}", 'checkout', '-f', sha, '--', '.',
                          config: @config)
           install_bundle(release)
+          BuildMetadata.write(release: release, component: 'backend', sha: sha, dry_run: @runner.dry_run)
           link_shared(release, manager.shared_dir)
           rails_check(release)
           rails_command.rails('db:migrate', release: release, timeout: 1800)
+          BuildMetadata.mark_deployed(release: release, component: 'backend', dry_run: @runner.dry_run)
           manager.activate(release) unless @runner.dry_run
           @systemd.restart(SERVICE)
           @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)

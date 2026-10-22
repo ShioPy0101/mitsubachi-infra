@@ -2182,6 +2182,8 @@ class MitsubachiInfraTest < Minitest::Test
       build = runner.calls.find { |command, _options| command == %w[npm run build] }
       refute_nil build
       assert_equal 'https://mitsubachi-api.shiosalt.com', build.last.fetch(:env).fetch('VITE_API_BASE_URL')
+      assert_equal 'abcdef1234567890', build.last.fetch(:env).fetch('VITE_GIT_COMMIT_SHA')
+      assert Time.iso8601(build.last.fetch(:env).fetch('VITE_BUILD_TIMESTAMP'))
       assert_equal 'http://127.0.0.1/', health.calls.first.first
       assert_equal 'mitsubachi.shiosalt.com', health.calls.first.last[:host]
       assert_equal true, health.calls.first.last[:allow_redirect]

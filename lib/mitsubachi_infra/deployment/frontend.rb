@@ -3,6 +3,7 @@
 require 'fileutils'
 require_relative '../frontend_env'
 require_relative 'release_manager'
+require_relative 'build_metadata'
 
 module MitsubachiInfra
   module Deployment
@@ -31,10 +32,16 @@ module MitsubachiInfra
           @runner.deploy('npm', 'ci', config: @config, chdir: release, timeout: 1800)
           env = FrontendEnv.new(config: @config, logger: @logger)
           env.log_summary(build_dir: release)
+          build_env = env.build_env.merge(BuildMetadata.build_env(sha))
           @runner.deploy(*app.fetch('build_command'), config: @config, chdir: release, timeout: 1800,
-                                                    env: env.build_env)
+                                                    env: build_env)
           env.verify_build_output!(release: release, output_directory: app.fetch('output_directory'),
                                    dry_run: @runner.dry_run)
+
+          BuildMetadata.write(release: release, component: 'frontend', sha: sha, built_at: build_env.fetch('VITE_BUILD_TIMESTAMP'),
+                              output_directory: app.fetch('output_directory'), dry_run: @runner.dry_run)
+          BuildMetadata.mark_deployed(release: release, component: 'frontend',
+                                      output_directory: app.fetch('output_directory'), dry_run: @runner.dry_run)
 
           @logger.puts("[SWITCH] frontend current -> #{release}")
           manager.activate(release) unless @runner.dry_run

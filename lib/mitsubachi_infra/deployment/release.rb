@@ -15,6 +15,7 @@ require_relative 'maintenance'
 require_relative 'migration'
 require_relative 'preflight'
 require_relative 'release_manager'
+require_relative 'build_metadata'
 require_relative 'release_report'
 require_relative 'smoke_tester'
 require_relative 'step_result'
@@ -225,6 +226,7 @@ module MitsubachiInfra
         link_backend_shared(release)
         @rails.runner('Rails.application.eager_load!', release: release, timeout: 300)
         @rails.runner("ActiveRecord::Base.connection.execute('SELECT 1')", release: release, timeout: 300)
+        BuildMetadata.write(release: release, component: 'backend', sha: sha)
         [release, sha]
       end
 
@@ -232,10 +234,13 @@ module MitsubachiInfra
         release, sha = checkout_release(frontend_root, @config.fetch('frontend').fetch('repository'), ref, release_id)
         @runner.deploy('npm', 'ci', config: @config, chdir: release, timeout: 1800)
         env = FrontendEnv.new(config: @config, logger: @logger)
+        build_env = env.build_env.merge(BuildMetadata.build_env(sha))
         @runner.deploy(*@config.fetch('frontend').fetch('build_command'), config: @config, chdir: release,
-                                                                        timeout: 1800, env: env.build_env)
+                                                                        timeout: 1800, env: build_env)
         env.verify_build_output!(release: release,
                                  output_directory: @config.fetch('frontend').fetch('output_directory'), dry_run: false)
+        BuildMetadata.write(release: release, component: 'frontend', sha: sha, built_at: build_env.fetch('VITE_BUILD_TIMESTAMP'),
+                            output_directory: @config.fetch('frontend').fetch('output_directory'))
         [release, sha]
       end
 
@@ -265,6 +270,9 @@ module MitsubachiInfra
       end
 
       def switch_pair!(backend_release, frontend_release, state)
+        BuildMetadata.mark_deployed(release: backend_release, component: 'backend')
+        BuildMetadata.mark_deployed(release: frontend_release, component: 'frontend',
+                                    output_directory: @config.fetch('frontend').fetch('output_directory'))
         backend_manager.activate(backend_release)
         begin
           frontend_manager.activate(frontend_release)
