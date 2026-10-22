@@ -55,6 +55,13 @@ jobs:
       - name: Rubyテストを実行
         run: ruby -Itest test/test_mitsubachi_infra.rb
 
+      - name: デモとリリース情報のテストを実行
+        run: |
+          ruby -Itest test/build_metadata_test.rb
+          ruby -Itest test/demo_hosts_test.rb
+          ruby -Itest test/demo_flags_test.rb
+          ruby -Itest test/test_release_deployment.rb
+
       - name: アップロード観測テストを実行
         run: ruby -Itest test/upload_observability_test.rb
 
