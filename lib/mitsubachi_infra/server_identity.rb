@@ -7,6 +7,7 @@ require_relative 'errors'
 
 module MitsubachiInfra
   # サーバー識別情報の初回登録・片側欠落の補完を担当する。
+  # 呼び出し元は infra 共通 Lock の内側で実行し、同時初期登録を防ぐ。
   # 登録済みの不一致は別ホストへの誤適用を示すため、自動的に揃えてはならない。
   class ServerIdentity
     def initialize(config:, runner:, logger:, writer: AtomicWriter.new(runner: runner))
@@ -19,6 +20,9 @@ module MitsubachiInfra
     def ensure!
       expected = @config.fetch('server')['server_id'].to_s.strip
       path = @config.fetch('paths').fetch('server_id')
+      if (File.exist?(path) || File.symlink?(path)) && !File.file?(path)
+        raise ValidationError, "server identity path is not a regular file: #{path}"
+      end
       actual = File.file?(path) ? File.read(path).strip : ''
       if !expected.empty? && !actual.empty? && expected != actual
         raise ValidationError, "server ID mismatch: expected #{expected}, got #{actual}"

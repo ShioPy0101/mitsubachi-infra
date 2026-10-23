@@ -90,6 +90,15 @@ class ServerIdentityTest < Minitest::Test
     assert_equal first, service.ensure!
   end
 
+  def test_directory_identity_path_is_rejected_without_writes
+    Dir.mkdir(@identity)
+    before = File.stat(@identity).mode
+    assert_raises(MitsubachiInfra::ValidationError) { service.ensure! }
+    assert_equal before, File.stat(@identity).mode
+    assert_nil YAML.safe_load_file(@path).dig('server', 'server_id')
+    assert_empty @runner.commands
+  end
+
   def test_mismatch_is_rejected_without_writes
     write_config('expected-host')
     File.write(@identity, 'different-host')
