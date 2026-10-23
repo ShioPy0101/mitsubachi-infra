@@ -10,7 +10,7 @@
 | `ALLOWED_HOSTS` | yes | no | `mitsubachi-api.shiosalt.com,127.0.0.1,localhost` | Rails Host Authorization allowlist | restart API/jobs |
 | `FRONTEND_ORIGIN` | yes | no | `https://mitsubachi.shiosalt.com` | CORS / CSRF origin | restart API/jobs |
 | `FRONTEND_URL` | yes | no | `https://mitsubachi.shiosalt.com` | Mail and frontend links | restart API/jobs |
-| `SESSION_COOKIE_SECURE` | yes | no | `true` | Secure Cookie | restart API/jobs |
+| `SESSION_COOKIE_SECURE` | no | no | `true` | 将来の切り替え用。現在の Rails production は未参照 | Rails 側で対応後は restart API/jobs |
 | `DATABASE_URL` | yes | yes | redacted | primary DB | restart API/jobs |
 | `DATABASE_CACHE_URL` | yes | yes | redacted | Rails cache DB | restart API/jobs |
 | `DATABASE_QUEUE_URL` | yes | yes | redacted | Solid Queue DB | restart API/jobs |
@@ -20,6 +20,11 @@
 | `RESEND_API_KEY` | yes | yes | redacted | Rails mail delivery | restart API/jobs |
 | `MAIL_FROM` | yes | no | `Mitsubachi <no-reply@shiosalt.com>` | verified sender | restart API/jobs |
 | `MEDIA_FFMPEG_PATH` | no | no | `ffmpeg` | 動画 Preview 生成に使う FFmpeg。未指定時も `ffmpeg` を PATH から解決 | restart API |
+
+Infra は `SESSION_COOKIE_SECURE=true` を生成しますが、現在の `mitsubachi-ruby` は
+production の session Cookie、`config.assume_ssl`、`config.force_ssl` をコードで有効にしており、
+この環境変数を参照しません。`false` へ変更しても LAN HTTP で認証できるようにはなりません。
+認証を伴う LAN HTTP をサポートするには、Rails 側の対応が必要です。
 
 `MEDIA_FFMPEG_PATH` は HTTP 入力ではなく、管理者が Rails service の実行環境へ
 設定する executable 名または path です。通常の Ubuntu package 配置では未指定の
