@@ -147,14 +147,23 @@ module MitsubachiInfra
         privileged('systemctl', 'restart', JOBS_SERVICE)
         privileged('systemctl', 'is-active', '--quiet', API_SERVICE)
         privileged('systemctl', 'is-active', '--quiet', JOBS_SERVICE)
-        HealthCheck.new(logger: @logger).check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
+        check_backend_health!
         cleanup(root, keep: app.fetch('keep_releases'), protected_paths: [previous].compact)
-      rescue StandardError
+      rescue StandardError => deploy_error
         FileUtils.rm_rf(release) unless @runner.dry_run || current_release(root) == release
         if previous && current_release(root) == release
-          activate(root, previous)
-          privileged('systemctl', 'restart', API_SERVICE, allow_failure: true)
-          privileged('systemctl', 'restart', JOBS_SERVICE, allow_failure: true)
+          begin
+            # systemd の WorkingDirectory=current により、旧 .ruby-version と Gem に同時に戻る。
+            # 片方の復旧失敗でももう片方の再起動は試み、両サービスの復旧を検査する。
+            activate(root, previous)
+            privileged('systemctl', 'restart', API_SERVICE, allow_failure: true)
+            privileged('systemctl', 'restart', JOBS_SERVICE, allow_failure: true)
+            privileged('systemctl', 'is-active', '--quiet', API_SERVICE)
+            privileged('systemctl', 'is-active', '--quiet', JOBS_SERVICE)
+            check_backend_health!
+          rescue StandardError => rollback_error
+            raise Error, "backend deploy failed: #{deploy_error.message}; rollback failed: #{rollback_error.message}"
+          end
         end
         raise
       end
@@ -203,6 +212,8 @@ module MitsubachiInfra
 
     def install_backend(release)
       ensure_required_rails_env!
+      # Ruby ビルド・Gem 導入・Rails 起動検査は current と稼働中の Puma に触れる前に完了させる。
+      RubyRuntime.new(config: deploy_config, runner: @runner).ensure!(release: release)
       install_bundler(release)
       @runner.deploy('bundle', 'config', 'set', '--local', 'deployment', 'true', config: deploy_config, chdir: release)
       @runner.deploy('bundle', 'config', 'set', '--local', 'without', 'development test', config: deploy_config,
@@ -221,22 +232,15 @@ module MitsubachiInfra
     end
 
     def install_bundler(release)
-      lock = File.join(release, 'Gemfile.lock')
-      return unless File.exist?(lock)
-
-      version = File.readlines(lock).each_cons(2).find { |a, _b| a.strip == 'BUNDLED WITH' }&.last&.strip
-      return if version.to_s.empty?
-
-      return if @runner.deploy('gem', 'list', '--installed', '--exact', 'bundler', '--version', version,
-                               config: deploy_config, allow_failure: true).success?
-
-      @runner.deploy('gem', 'install', 'bundler', '--version', version, '--no-document', config: deploy_config)
+      RubyRuntime.new(config: deploy_config, runner: @runner).ensure_bundler!(release: release)
     end
 
     def install_packages
       privileged('apt-get', 'update', timeout: 1800)
       privileged('apt-get', 'install', '-y', 'git', 'curl', 'ca-certificates', 'build-essential', 'ruby-full',
                  'postgresql-client', 'nginx', 'ufw', 'certbot', 'python3-certbot-nginx', 'rsync',
+                 'autoconf', 'bison', 'patch', 'pkg-config', 'libssl-dev', 'libyaml-dev', 'zlib1g-dev',
+                 'libreadline-dev', 'libffi-dev', 'libgmp-dev', 'libpq-dev',
                  timeout: 1800)
     end
 
@@ -319,7 +323,7 @@ module MitsubachiInfra
       privileged('nginx', '-t')
       privileged('systemctl', 'is-active', '--quiet', API_SERVICE)
       privileged('systemctl', 'is-active', '--quiet', JOBS_SERVICE)
-      HealthCheck.new(logger: @logger).check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
+      check_backend_health!
       nginx_health_url = "http://127.0.0.1#{@config.fetch('backend').fetch('health_path')}/ready"
       privileged('curl', '-fsS', '-H', "Host: #{@config.health_host}", nginx_health_url)
       privileged('ss', '-ltn')
@@ -376,6 +380,10 @@ module MitsubachiInfra
 
     def frontend_health_host
       @config.public? ? @config.frontend_host : nil
+    end
+
+    def check_backend_health!
+      HealthCheck.new(logger: @logger).check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
     end
 
     def backend_health_url

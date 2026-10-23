@@ -139,3 +139,34 @@ curl -Iv https://mitsubachi-api.shiosalt.com/api/health/ready
 ```
 
 Cloudflare は初期運用では DNS only を推奨します。Cloudflare Proxy は大容量 upload/download、Range Request、timeout、real client IP、Cloudflare 側 upload 制限への影響を確認するまで完全対応済みとして扱いません。
+
+
+## リリースごとの Ruby バージョン
+
+Rails の Ruby は、取得した commit の `.ruby-version`（数値の `major.minor.patch`）で決定する。
+デプロイ時にファイルがない場合や不正な場合は停止し、`runtime.ruby_version` へ暗黙にフォールバックしない。
+既存の `/etc/mitsubachi/config.yml` の `runtime.ruby_version: 3.3.7` は、そのまま残してよい。
+これはアプリ取得前の install/bootstrap 用の明示的な初期値に限定され、デプロイ先 Ruby の固定値ではない。
+
+Git 取得後、未導入の Ruby を deploy ユーザーの rbenv にビルドし、対象リリースの作業ディレクトリで
+`Gemfile.lock` の Bundler、依存 Gem、Rails 起動・DB 接続を確認してから `current` を切り替える。
+新 Ruby の準備中は `rbenv global` を変更せず、Puma/worker の停止や再起動も行わない。
+ビルド、Gem 導入、起動検査に失敗した場合は旧リリースが稼働を継続する。
+統合 `release` コマンドは従来どおり準備前に maintenance を有効にするが、Puma は停止せず、
+migration 開始前の準備失敗では maintenance を解除する。
+
+Ruby が未導入の場合は ruby-build を fetch しただけでなく、作業ツリーも fast-forward してからビルドする。
+ローカルの追跡ファイルの変更や履歴分岐で更新できない場合は自動破棄せず停止する。
+初回のこの変更の導入では、install/bootstrap で追加のビルド依存パッケージを導入し、
+API/worker の systemd unit を再生成・配置する必要がある。
+実際の適用とサービス再起動はリリース用ホストで利用者が実行する。開発ホストでテストしても適用済みとはならない。
+
+systemd は `WorkingDirectory=current` の `.ruby-version` を使い、環境ファイルの
+`RBENV_VERSION` / `RBENV_DIR` は起動時に除去する。
+切り替え後の restart または health check が失敗した場合は、旧 `current` に戻して再起動するため、
+旧 Ruby と旧リリースの Gem が同時に選択される。旧 Ruby は自動削除しない。
+旧リリースが存在しない初回デプロイには切り戻し先がない。DB migration の自動 down は行わないため、
+migration は旧コードと互換性を保つ必要がある。準備・切り替えに成功しても restart による短い停止は生じ得る。
+
+導入順は infra PR の適用を先にし、アプリの `.ruby-version` 更新 PR を後にする。
+実ホストでの Ruby ビルド、systemd 再起動、切り戻しは開発環境の fake テストとは別に確認する。

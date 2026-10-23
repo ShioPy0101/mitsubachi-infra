@@ -60,6 +60,8 @@ module MitsubachiInfra
     PACKAGES = %w[
       git curl ca-certificates build-essential postgresql postgresql-contrib
       nginx ufw certbot python3-certbot-nginx ruby-full rsync jq
+      autoconf bison patch pkg-config libssl-dev libyaml-dev zlib1g-dev
+      libreadline-dev libffi-dev libgmp-dev libpq-dev
     ].freeze
 
     def initialize(config:, runner:, repo_root:, input: $stdin, output: $stderr, cli_root: CLI_ROOT, cli_link: CLI_LINK,

@@ -2,6 +2,7 @@
 
 require 'fileutils'
 require_relative '../rails_command'
+require_relative '../ruby_runtime'
 require_relative 'release_manager'
 
 module MitsubachiInfra
@@ -31,6 +32,7 @@ module MitsubachiInfra
           @runner.deploy('mkdir', '-p', release, config: @config)
           @runner.deploy('git', "--git-dir=#{repo}", "--work-tree=#{release}", 'checkout', '-f', sha, '--', '.',
                          config: @config)
+          RubyRuntime.new(config: @config, runner: @runner).ensure!(release: release)
           install_bundle(release)
           link_shared(release, manager.shared_dir)
           rails_check(release)
@@ -44,6 +46,7 @@ module MitsubachiInfra
           if previous && manager.current_release == release
             manager.activate(previous)
             @systemd.restart(SERVICE)
+            @health.check!(backend_health_url, dry_run: @runner.dry_run, host: @config.health_host)
           end
           raise
         end
@@ -61,15 +64,7 @@ module MitsubachiInfra
       end
 
       def install_bundle(release)
-        lock = File.join(release, 'Gemfile.lock')
-        if File.exist?(lock)
-          version = File.readlines(lock).each_cons(2).find { |a, _b| a.strip == 'BUNDLED WITH' }&.last&.strip
-          if version
-            @runner.deploy('gem', 'list', '--installed', '--exact', 'bundler', '--version', version, config: @config,
-                                                                                                     allow_failure: true)
-          end
-          @runner.deploy('gem', 'install', 'bundler', '--version', version, '--no-document', config: @config) if version
-        end
+        RubyRuntime.new(config: @config, runner: @runner).ensure_bundler!(release: release)
         @runner.deploy('bundle', 'config', 'set', '--local', 'deployment', 'true', config: @config, chdir: release)
         @runner.deploy('bundle', 'config', 'set', '--local', 'without', 'development test', config: @config,
                                                                                             chdir: release)

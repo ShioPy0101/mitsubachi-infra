@@ -9,6 +9,7 @@ require_relative '../frontend_env'
 require_relative '../health_check'
 require_relative '../lock'
 require_relative '../rails_command'
+require_relative '../ruby_runtime'
 require_relative 'database_backup'
 require_relative 'diagnostics'
 require_relative 'maintenance'
@@ -218,6 +219,9 @@ module MitsubachiInfra
 
       def prepare_backend(release_id, ref)
         release, sha = checkout_release(backend_root, @config.fetch('backend').fetch('repository'), ref, release_id)
+        runtime = RubyRuntime.new(config: @config, runner: @runner)
+        runtime.ensure!(release: release)
+        runtime.ensure_bundler!(release: release)
         @runner.deploy('bundle', 'config', 'set', '--local', 'deployment', 'true', config: @config, chdir: release)
         @runner.deploy('bundle', 'config', 'set', '--local', 'without', 'development test', config: @config,
                                                                                               chdir: release)

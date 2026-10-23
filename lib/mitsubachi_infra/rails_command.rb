@@ -44,7 +44,9 @@ module MitsubachiInfra
     private
 
     def rails_env
-      env_file_values.merge(BASE_ENV)
+      # Ruby は実行対象の release/.ruby-version が決める。環境ファイルの固定値で
+      # 新リリースの検査や旧リリースへの切り戻しを別の Ruby に向けない。
+      env_file_values.reject { |key, _| %w[RBENV_VERSION RBENV_DIR].include?(key) }.merge(BASE_ENV)
     end
 
     def unquote(value)

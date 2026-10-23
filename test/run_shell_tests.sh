@@ -38,6 +38,9 @@ run_expect_failure "install bootstrap requires root" bash "${ROOT}/scripts/insta
 grep -F 'root 権限で実行してください' /tmp/mitsubachi-test.err >/dev/null || fail "bootstrap root error is clear"
 
 run_expect_success "ruby unit tests" ruby "${ROOT}/test/test_mitsubachi_infra.rb"
+run_expect_success "release Ruby resolution" ruby "${ROOT}/test/test_ruby_runtime.rb"
+run_expect_success "release Ruby deployment failures" ruby "${ROOT}/test/test_release_ruby_deployment.rb"
+run_expect_success "legacy release Ruby preparation" ruby "${ROOT}/test/test_legacy_ruby_runtime.rb"
 
 run_expect_success "cli status dry-run json" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" --dry-run status --json
 grep -F '"deployment_mode": "lan"' /tmp/mitsubachi-test.out >/dev/null || fail "status json contains deployment mode"
