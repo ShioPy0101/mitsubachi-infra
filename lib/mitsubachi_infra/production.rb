@@ -232,16 +232,7 @@ module MitsubachiInfra
     end
 
     def install_bundler(release)
-      lock = File.join(release, 'Gemfile.lock')
-      return unless File.exist?(lock)
-
-      version = File.readlines(lock).each_cons(2).find { |a, _b| a.strip == 'BUNDLED WITH' }&.last&.strip
-      return if version.to_s.empty?
-
-      return if @runner.deploy('gem', 'list', '--installed', '--exact', 'bundler', '--version', version,
-                               config: deploy_config, chdir: release, allow_failure: true).success?
-
-      @runner.deploy('gem', 'install', 'bundler', '--version', version, '--no-document', config: deploy_config, chdir: release)
+      RubyRuntime.new(config: deploy_config, runner: @runner).ensure_bundler!(release: release)
     end
 
     def install_packages

@@ -27,6 +27,22 @@ module MitsubachiInfra
       version
     end
 
+    # Bundler も release の Ruby に導入し、ホストの global Ruby と混在させない。
+    def ensure_bundler!(release:)
+      lock = File.join(release, 'Gemfile.lock')
+      return unless File.file?(lock)
+
+      version = File.readlines(lock).each_cons(2).find { |a, _| a.strip == 'BUNDLED WITH' }&.last&.strip
+      return if version.to_s.empty?
+      raise ValidationError, 'invalid Bundler version in Gemfile.lock' unless version.match?(/\A[0-9]+\.[0-9]+\.[0-9]+\z/)
+
+      return if @runner.deploy('gem', 'list', '--installed', '--exact', 'bundler', '--version', version,
+                               config: @config, chdir: release, allow_failure: true).success?
+
+      @runner.deploy('gem', 'install', 'bundler', '--version', version, '--no-document',
+                     config: @config, chdir: release)
+    end
+
     # 欠落・複数行・シェル式などを許可せず、設定値への暗黙の退避もしない。
     def release_version(release)
       path = File.join(release, '.ruby-version')

@@ -5,6 +5,7 @@ require 'tmpdir'
 require 'stringio'
 require 'fileutils'
 require_relative '../lib/mitsubachi_infra/production'
+require_relative '../lib/mitsubachi_infra/deployment/release'
 require_relative '../lib/mitsubachi_infra/configuration'
 require_relative '../lib/mitsubachi_infra/command_runner'
 
@@ -65,6 +66,18 @@ class ReleaseRubyDeploymentTest < Minitest::Test
     def check_backend_health!
       health.check!
     end
+  end
+
+  class Release < MitsubachiInfra::Deployment::Release
+    attr_accessor :candidate
+
+    private
+
+    def checkout_release(*)
+      [candidate, 'a' * 40]
+    end
+
+    def link_backend_shared(*); end
   end
 
   def setup
@@ -143,6 +156,17 @@ class ReleaseRubyDeploymentTest < Minitest::Test
     assert_raises(MitsubachiInfra::Error) { deploy }
     assert_equal @old, File.realpath(File.join(@dir, 'current'))
     assert_equal 2, @health.calls
+  end
+
+  def test_coordinated_release_prepares_ruby_and_bundler_before_boot
+    release = Release.new(config: @config, runner: @runner, logger: StringIO.new)
+    release.candidate = @new
+    assert_equal [@new, 'a' * 40], release.send(:prepare_backend, 'candidate', 'main')
+    commands = @runner.calls.map(&:first)
+    assert_includes commands, %w[rbenv install 3.4.11]
+    assert_includes commands, %w[gem install bundler --version 2.6.9 --no-document]
+    assert_equal @old, File.realpath(File.join(@dir, 'current'))
+    refute commands.any? { |argv| argv.include?('systemctl') }
   end
 
   def test_rollback_failure_reports_both_errors
