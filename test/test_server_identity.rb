@@ -6,6 +6,7 @@ require 'fileutils'
 require 'stringio'
 require_relative '../lib/mitsubachi_infra/server_identity'
 require_relative '../lib/mitsubachi_infra/configuration'
+require_relative '../lib/mitsubachi_infra/production'
 
 class ServerIdentityTest < Minitest::Test
   class Runner
@@ -18,7 +19,17 @@ class ServerIdentityTest < Minitest::Test
 
     def run(*argv)
       @commands << argv
+      Struct.new(:stdout).new('')
     end
+  end
+
+  class Production < MitsubachiInfra::Production
+    private
+
+    def success?(*); true; end
+    def privileged_success?(*); true; end
+    def frontend_doctor_lines; []; end
+    def http_ok?(*, **); true; end
   end
 
   def setup
@@ -117,7 +128,33 @@ class ServerIdentityTest < Minitest::Test
     assert_equal id, service.ensure!
   end
 
+  def test_production_check_registers_identity_then_continues_checks
+    production.production_check
+    id = File.read(@identity).strip
+    assert_equal id, YAML.safe_load_file(@path).dig('server', 'server_id')
+    assert_includes @logger.string, 'Rails API service: active'
+  end
+
+  def test_deploy_and_doctor_reject_unregistered_identity_without_initializing
+    assert_raises(MitsubachiInfra::ValidationError) { production.deploy('backend') }
+    assert_raises(MitsubachiInfra::ValidationError) { production.doctor }
+    refute_path_exists @identity
+    assert_nil YAML.safe_load_file(@path).dig('server', 'server_id')
+  end
+
+  def test_dry_run_production_check_does_not_register_identity
+    @runner.dry_run = true
+    production.production_check
+    refute_path_exists @identity
+    assert_nil YAML.safe_load_file(@path).dig('server', 'server_id')
+    assert_includes @logger.string, '[DRY-RUN]'
+  end
+
   private
+
+  def production
+    Production.new(config: @config, runner: @runner, logger: @logger, repo_root: File.expand_path('..', __dir__))
+  end
 
   def write_config(id)
     data = { 'server_ip' => '192.168.1.2', 'custom_setting' => 'keep-me',

@@ -16,6 +16,7 @@ require_relative 'nginx'
 require_relative 'node_runtime'
 require_relative 'postgresql'
 require_relative 'ruby_runtime'
+require_relative 'server_identity'
 require_relative 'systemd'
 
 module MitsubachiInfra
@@ -34,6 +35,7 @@ module MitsubachiInfra
       lib/mitsubachi_infra/frontend_env.rb
       lib/mitsubachi_infra/health_check.rb
       lib/mitsubachi_infra/lock.rb
+      lib/mitsubachi_infra/server_identity.rb
       lib/mitsubachi_infra/rails_command.rb
       lib/mitsubachi_infra/deployment/database_backup.rb
       lib/mitsubachi_infra/deployment/diagnostics.rb
@@ -85,6 +87,7 @@ module MitsubachiInfra
       NodeRuntime.new(config: @config, runner: @runner).ensure!
       DeployUser.new(config: @config, runner: @runner).ensure!
       save_config_if_changed
+      ServerIdentity.new(config: @config, runner: @runner, logger: @output).ensure!
       RubyRuntime.new(config: @config, runner: @runner).ensure!
       cli_result = install_cli
       return cli_result if cli_result[:reexec]
