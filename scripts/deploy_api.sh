@@ -4,6 +4,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=scripts/lib/ruby_runtime.sh
+source "${SCRIPT_DIR}/lib/ruby_runtime.sh"
 
 usage() {
   cat <<'USAGE'
@@ -45,7 +47,10 @@ while (($#)); do
 done
 
 require_not_root
-require_command git ruby bundle curl flock awk sed find sort tail xargs
+require_command git curl flock awk sed find sort tail xargs
+if [[ "${SKIP_RESTART}" != true ]]; then
+  require_command systemctl
+fi
 [[ -n "${RAILS_REPO_URL}" ]] || die "--repo-url must not be empty"
 [[ -n "${REF}" ]] || die "--ref must not be empty"
 if ! [[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] || (( KEEP_RELEASES < 1 )); then
@@ -123,21 +128,16 @@ log "release directory を作成しました: ${release_name}"
 set_stage "ruby and bundler"
 log "Rails API の .ruby-version / Gemfile.lock に従って Ruby と Bundler を確認します。"
 cd "${tmp_release}"
-if [[ -f .ruby-version ]]; then
-  ruby_version="$(tr -d '[:space:]' < .ruby-version)"
-  if command -v rbenv >/dev/null 2>&1; then
-    rbenv versions --bare | grep -Fx -- "${ruby_version}" >/dev/null || die "Ruby ${ruby_version} is not installed"
-  fi
-fi
+prepare_release_ruby "${tmp_release}"
 if [[ -f Gemfile.lock ]]; then
   bundler_version="$(awk '/^BUNDLED WITH$/ {getline; gsub(/^[[:space:]]+/, "", $0); print; exit}' Gemfile.lock)"
   if [[ -n "${bundler_version}" ]]; then
-    gem list -i bundler -v "${bundler_version}" >/dev/null || gem install bundler -v "${bundler_version}"
+    rbenv exec gem list -i bundler -v "${bundler_version}" >/dev/null || rbenv exec gem install bundler -v "${bundler_version}"
   fi
 fi
-bundle config set --local deployment true
-bundle config set --local without "development test"
-bundle install
+rbenv exec bundle config set --local deployment true
+rbenv exec bundle config set --local without "development test"
+rbenv exec bundle install
 
 set_stage "shared paths"
 # log/tmp は release ごとに消えると調査や pid 管理が不安定になるため shared へ
@@ -150,11 +150,11 @@ mkdir -p -- tmp/pids tmp/cache tmp/sockets
 
 set_stage "rails checks"
 log "production boot check と DB 接続確認を実行します。秘密情報は表示しません。"
-bundle exec rails runner 'Rails.application.eager_load!; puts "boot-ok"'
-bundle exec rails runner 'ActiveRecord::Base.connection.execute("SELECT 1"); puts "db-ok"'
+rbenv exec bundle exec rails runner 'Rails.application.eager_load!; puts "boot-ok"'
+rbenv exec bundle exec rails runner 'ActiveRecord::Base.connection.execute("SELECT 1"); puts "db-ok"'
 if [[ "${SKIP_MIGRATE}" != true ]]; then
   log "db:migrate を実行します。失敗時も migration の自動 down は行いません。"
-  bundle exec rails db:migrate
+  rbenv exec bundle exec rails db:migrate
 else
   log "--skip-migrate 指定のため db:migrate は実行しません。"
 fi
@@ -170,18 +170,14 @@ release_switched=true
 set_stage "restart and health"
 if [[ "${SKIP_RESTART}" != true ]]; then
   log "systemd service を再起動し、ready health が HTTP 200 になるまで確認します。"
-  systemctl --user status >/dev/null 2>&1 || true
-  if command -v systemctl >/dev/null 2>&1; then
-    sudo -n systemctl restart "${SERVICE_NAME}.service" || die "failed to restart ${SERVICE_NAME}; configure passwordless sudo for deploy or restart manually with --skip-restart"
-    if ! health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}"; then
-      if [[ -n "${previous_release}" && -d "${previous_release}" ]]; then
-        log "health check 失敗のため、current symlink を直前 release へ戻します: ${previous_release}"
-        atomic_symlink_switch "${previous_release}" "${CURRENT_LINK}"
-        sudo -n systemctl restart "${SERVICE_NAME}.service" || true
-        health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}"
-      fi
-      die "deployment health check failed"
+  if ! sudo -n systemctl restart "${SERVICE_NAME}.service" || ! health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}"; then
+    if [[ -n "${previous_release}" && -d "${previous_release}" ]]; then
+      log "restart / health check 失敗のため、旧 release とその Ruby へ戻します: ${previous_release}"
+      atomic_symlink_switch "${previous_release}" "${CURRENT_LINK}"
+      sudo -n systemctl restart "${SERVICE_NAME}.service" || die "deployment failed; rollback restart also failed"
+      health_check_retry "${HEALTH_URL}" 30 2 "${HEALTH_HOST}" || die "deployment failed; rollback health check also failed"
     fi
+    die "deployment restart or health check failed"
   fi
 else
   log "--skip-restart 指定のため service restart と health check は実行しません。"
