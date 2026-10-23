@@ -1894,7 +1894,7 @@ class MitsubachiInfraTest < Minitest::Test
       cli_root = File.join(dir, 'opt', 'mitsubachi-infra')
       cli_link = File.join(dir, 'bin', 'mitsubachi-infra')
       FileUtils.mkdir_p(File.dirname(cli_link))
-      config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+      config = MitsubachiInfra::Configuration.new(File.join(dir, 'config.yml'), data: config_data(
         'deployment_mode' => 'lan',
         'server_ip' => '192.168.10.151',
         'paths' => {
@@ -1905,6 +1905,7 @@ class MitsubachiInfraTest < Minitest::Test
           'server_id' => File.join(dir, 'etc', 'server-id')
         }
       ))
+      File.write(config.path, config.data.to_yaml)
 
       result = without_self_update_marker do
         MitsubachiInfra::Installer.new(config: config, runner: NodeRunner.new(node_stdout: 'v22.0.0'), repo_root: ROOT,
@@ -1915,6 +1916,9 @@ class MitsubachiInfraTest < Minitest::Test
       assert_equal cli_link, result[:executable]
       assert File.symlink?(File.join(cli_root, 'current'))
       assert_equal File.realpath(File.join(cli_root, 'current')), result[:release]
+      id = File.read(config.fetch('paths').fetch('server_id')).strip
+      assert_equal id, YAML.safe_load_file(config.path).dig('server', 'server_id')
+      refute_empty id
     end
   end
 
@@ -1926,7 +1930,7 @@ class MitsubachiInfraTest < Minitest::Test
       MitsubachiInfra::Installer.new(config: production_config(dir), runner: RecordingRunner.new,
                                      repo_root: ROOT, cli_root: cli_root, cli_link: cli_link).send(:install_cli)
       release = File.realpath(File.join(cli_root, 'current'))
-      config = MitsubachiInfra::Configuration.new('/missing', data: config_data(
+      config = MitsubachiInfra::Configuration.new(File.join(dir, 'config.yml'), data: config_data(
         'deployment_mode' => 'lan',
         'server_ip' => '192.168.10.151',
         'paths' => {
@@ -1943,6 +1947,7 @@ class MitsubachiInfraTest < Minitest::Test
           }
         }
       ))
+      File.write(config.path, config.data.to_yaml)
       runner = NodeRunner.new(node_stdout: 'v22.0.0')
 
       result = with_self_update_marker do
@@ -1953,6 +1958,9 @@ class MitsubachiInfraTest < Minitest::Test
       assert_equal false, result[:reexec]
       assert_equal release, File.realpath(File.join(cli_root, 'current'))
       assert_includes runner.commands, ['nginx', '-t']
+      id = File.read(config.fetch('paths').fetch('server_id')).strip
+      assert_equal id, YAML.safe_load_file(config.path).dig('server', 'server_id')
+      refute_empty id
     end
   end
 

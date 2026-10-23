@@ -20,6 +20,7 @@ require_relative 'nginx'
 require_relative 'node_runtime'
 require_relative 'rails_command'
 require_relative 'ruby_runtime'
+require_relative 'server_identity'
 require_relative 'systemd'
 
 module MitsubachiInfra
@@ -78,8 +79,8 @@ module MitsubachiInfra
       end
     end
 
-    def production_check
-      check_server_id unless @runner.dry_run
+    def production_check(register_identity: true)
+      check_server_id(allow_create: register_identity) unless @runner.dry_run && !register_identity
       @logger.puts('[LOCAL] Running on production host')
       @logger.puts("[LOCAL] Deploy user: #{success?('id', deploy_user) ? 'ok' : 'missing'}")
       @logger.puts("[LOCAL] Nginx active: #{if privileged_success?('systemctl', 'is-active', '--quiet',
@@ -111,7 +112,7 @@ module MitsubachiInfra
       @logger.puts("[LOCAL] Ruby: #{RUBY_VERSION}")
       @logger.puts("[LOCAL] Git: #{success?('git', '--version') ? 'ok' : 'missing'}")
       @logger.puts("[LOCAL] Nginx: #{success?('which', 'nginx') ? 'ok' : 'missing'}")
-      production_check
+      production_check(register_identity: false)
     end
 
     def doctor_frontend
@@ -340,15 +341,15 @@ module MitsubachiInfra
     end
 
     def check_server_id(allow_create: false)
+      if allow_create
+        return ServerIdentity.new(config: @config, runner: @runner, logger: @logger).ensure!
+      end
+
       expected = @config.fetch('server')['server_id'].to_s
       raise ValidationError, 'server.server_id is required' if expected.empty?
 
       path = @config.fetch('paths').fetch('server_id')
       actual = File.exist?(path) ? File.read(path).strip : ''
-      if actual.empty? && allow_create
-        atomic_write(path, "#{expected}\n", owner: 'root', group: 'root', mode: '0644')
-        return
-      end
       return if actual == expected
 
       raise ValidationError,

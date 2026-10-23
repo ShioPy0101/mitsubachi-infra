@@ -21,6 +21,15 @@ mitsubachi-infra CLI
 
 誤ったホストへのデプロイを避けるため、`/etc/mitsubachi/server-id` と `config.yml` の `server.server_id` を一致させます。一致しない場合、deploy と env 更新は停止します。
 
+`install` / `bootstrap` / `configure` / `sudo mitsubachi-infra production-check` は、識別情報が未登録なら自動で初期登録します。
+両方が未設定・空なら UUID を生成し、片方だけが登録済みならその値を引き継いでもう片方を補完します。
+両方が登録済みで不一致なら上書きせず停止します。`--dry-run` は登録予定のみを表示し、UUID の生成や設定変更を行いません。
+
+初期登録は他の infra 操作と同じ排他ロック内で実行します。識別ファイルを先に保存するため、config 保存の途中で失敗しても次回は同じ ID を再利用します。
+設定保存時はバックアップを作成し、既存の設定値・未知のキーを保持します。YAML の再出力によりコメントや書式は変わる場合があります。
+config は既存 owner/group を保って 0640、識別ファイルは root:root 0644 で配置します。
+デプロイと rollback は未登録状態を自動登録せず停止し、`doctor` は読み取り専用の識別確認を維持します。
+
 ## Release Layout
 
 ```text

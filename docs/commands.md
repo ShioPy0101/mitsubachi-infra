@@ -85,13 +85,20 @@ sudo mitsubachi-infra rollback frontend
 
 ## production-check / doctor
 
-production-check は本番 service、Nginx、TLS endpoint、Minecraft port 設定を確認します。doctor はローカル command availability も併せて確認します。
+production-check は未登録のサーバー ID を初期登録したうえで、本番 service、Nginx、TLS endpoint、Minecraft port 設定を確認します。設定を書き込む可能性があるため root 権限が必要です。doctor はローカル command availability も併せて確認し、識別情報の初期登録は行いません。
 
 ```bash
 sudo mitsubachi-infra production-check
 mitsubachi-infra doctor
 mitsubachi-infra doctor frontend
 mitsubachi-infra config show
+```
+
+既存環境で `server.server_id is required` が出ていた場合、infra の更新後に `sudo mitsubachi-infra production-check` を実行すると初期登録できます。手動の UUID 発行・config 編集は不要です。まだ PATH 上の CLI を更新していない場合は、更新したリポジトリで次を実行できます。この確認処理はサービスを再起動しません。
+
+```bash
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml --dry-run production-check
+sudo ./bin/mitsubachi-infra --config /etc/mitsubachi/config.yml production-check
 ```
 
 ## https

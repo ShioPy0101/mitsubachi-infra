@@ -52,7 +52,7 @@ module MitsubachiInfra
         locked { production.bootstrap }
       when 'production-check'
         @config.validate!
-        production.production_check
+        locked { production.production_check }
       when 'doctor'
         doctor
       when 'mail-test' then mail_test
@@ -400,7 +400,7 @@ module MitsubachiInfra
     end
 
     def root_required?(command, argv)
-      return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test smoke-test].include?(command)
+      return true if %w[install bootstrap configure deploy deploy-backend deploy-frontend redeploy rollback rollback-backend rollback-frontend mail-test smoke-test production-check].include?(command)
       return true if command == 'maintenance' && %w[enable disable].include?(argv.first || 'status')
       return true if command == 'postgres' && %w[wal-archive base-backup].include?(argv.first)
       return false unless command == 'https'
