@@ -28,7 +28,7 @@ module MitsubachiInfra
 
     def backup_path(path)
       stamp = Time.now.utc.strftime('%Y%m%dT%H%M%SZ')
-      FileUtils.cp_a(path, "#{path}.backup.#{stamp}")
+      FileUtils.cp_r(path, "#{path}.backup.#{stamp}", preserve: true, dereference_root: false)
     end
   end
 end
