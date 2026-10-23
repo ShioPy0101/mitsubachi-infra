@@ -239,6 +239,8 @@ module MitsubachiInfra
       privileged('apt-get', 'update', timeout: 1800)
       privileged('apt-get', 'install', '-y', 'git', 'curl', 'ca-certificates', 'build-essential', 'ruby-full',
                  'postgresql-client', 'nginx', 'ufw', 'certbot', 'python3-certbot-nginx', 'rsync',
+                 'autoconf', 'bison', 'patch', 'pkg-config', 'libssl-dev', 'libyaml-dev', 'zlib1g-dev',
+                 'libreadline-dev', 'libffi-dev', 'libgmp-dev', 'libpq-dev',
                  timeout: 1800)
     end
 

@@ -7,6 +7,7 @@ require 'fileutils'
 require_relative '../lib/mitsubachi_infra/production'
 require_relative '../lib/mitsubachi_infra/deployment/release'
 require_relative '../lib/mitsubachi_infra/configuration'
+require_relative '../lib/mitsubachi_infra/installer'
 require_relative '../lib/mitsubachi_infra/command_runner'
 
 class ReleaseRubyDeploymentTest < Minitest::Test
@@ -167,6 +168,15 @@ class ReleaseRubyDeploymentTest < Minitest::Test
     assert_includes commands, %w[gem install bundler --version 2.6.9 --no-document]
     assert_equal @old, File.realpath(File.join(@dir, 'current'))
     refute commands.any? { |argv| argv.include?('systemctl') }
+  end
+
+  def test_install_paths_include_ruby_and_pg_build_dependencies
+    assert_includes MitsubachiInfra::Installer::PACKAGES, 'libssl-dev'
+    assert_includes MitsubachiInfra::Installer::PACKAGES, 'libyaml-dev'
+    assert_includes MitsubachiInfra::Installer::PACKAGES, 'libpq-dev'
+    @production.send(:install_packages)
+    install = @runner.calls.map(&:first).find { |argv| argv.include?('install') }
+    %w[libssl-dev libyaml-dev libpq-dev].each { |package| assert_includes install, package }
   end
 
   def test_systemd_units_select_ruby_from_current_release
