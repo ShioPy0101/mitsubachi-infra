@@ -15,7 +15,8 @@ Environment=RBENV_ROOT=/home/<%= @config.fetch("server").fetch("deploy_user") %>
 Environment=PATH=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims:/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStartPre=/usr/bin/test -L <%= @config.fetch("paths").fetch("rails_root") %>/current
 ExecStartPre=/usr/bin/test -f <%= @config.fetch("paths").fetch("rails_root") %>/current/bin/jobs
-ExecStart=/home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims/bundle exec bin/jobs
+# release の .ruby-version を優先し、環境ファイルの古い Ruby 固定値を引き継がない。
+ExecStart=/usr/bin/env -u RBENV_VERSION -u RBENV_DIR /home/<%= @config.fetch("server").fetch("deploy_user") %>/.rbenv/shims/bundle exec bin/jobs
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=60s

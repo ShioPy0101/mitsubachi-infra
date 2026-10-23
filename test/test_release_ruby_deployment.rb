@@ -169,6 +169,16 @@ class ReleaseRubyDeploymentTest < Minitest::Test
     refute commands.any? { |argv| argv.include?('systemctl') }
   end
 
+  def test_systemd_units_select_ruby_from_current_release
+    root = File.expand_path('..', __dir__)
+    %w[templates/systemd/mitsubachi-api.service.erb templates/systemd/mitsubachi-jobs.service.erb
+       systemd/mitsubachi-api.service].each do |path|
+      content = File.read(File.join(root, path))
+      assert_match(%r{WorkingDirectory=.+/current}, content)
+      assert_includes content, 'ExecStart=/usr/bin/env -u RBENV_VERSION -u RBENV_DIR '
+    end
+  end
+
   def test_rollback_failure_reports_both_errors
     @health.failures = 2
     error = assert_raises(MitsubachiInfra::Error) { deploy }
