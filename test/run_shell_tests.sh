@@ -37,6 +37,11 @@ run_expect_success "ruby exe cli help" ruby "${ROOT}/exe/mitsubachi-infra" help
 run_expect_failure "install bootstrap requires root" bash "${ROOT}/scripts/install_local.sh" --dry-run
 grep -F 'root 権限で実行してください' /tmp/mitsubachi-test.err >/dev/null || fail "bootstrap root error is clear"
 
+run_expect_success "atomic configuration backups" ruby "${ROOT}/test/test_atomic_writer.rb"
+run_expect_success "server identity registration" ruby "${ROOT}/test/test_server_identity.rb"
+run_expect_failure "production-check requires root" ruby "${ROOT}/bin/mitsubachi-infra" --config "${ROOT}/test/fixtures/config.lan.yml" production-check
+grep -F 'production-check must be run as root' /tmp/mitsubachi-test.err >/dev/null || fail "production-check root error is clear"
+
 run_expect_success "ruby unit tests" ruby "${ROOT}/test/test_mitsubachi_infra.rb"
 run_expect_success "release Ruby resolution" ruby "${ROOT}/test/test_ruby_runtime.rb"
 run_expect_success "release Ruby deployment failures" ruby "${ROOT}/test/test_release_ruby_deployment.rb"
